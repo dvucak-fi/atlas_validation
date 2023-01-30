@@ -1,0 +1,59 @@
+SELECT COUNT(1) AS RecCount
+  FROM FDW.FactClientServiceIncident
+  
+--RecCount: 76,533
+
+/*
+  TEST 1: CHECK TO SEE IF ANY CSI HAS DUPLICATE CURRENT RECORD FLAGS
+*/
+
+SELECT IncidentId
+     , SUM(CONVERT(INT, CurrentRecord))
+  FROM fdw.factclientserviceincident
+ GROUP
+    BY IncidentId
+HAVING SUM(CONVERT(INT, CurrentRecord)) > 1
+
+--TEST PASSED 
+
+
+/*
+  TEST 2: UPDATE SOURCE RECORDSET TO SHOW AS IF THE CSI WAS RESOLVED THEN RUN FACT UPSERT 
+  
+  EXPECTED OUTCOME: ONE ADDITIONAL RECORD ADDED TO FACT TABLE. PREVIOUS INCIDENT RECORD WAS DEACTIVATED AND EFFECTIVEEND DATE WAS SET TO NEW RECORDS START DATE
+*/
+
+UPDATE [BAS].[CSI_IncidentMainTable]
+   SET dtResolutionDate = GETDATE()
+ WHERE IID = 11345
+ 
+DECLARE @A UNIQUEIDENTIFIER = NEWID() 
+   EXEC [FDW].[spUpsertFactClientServiceIncident] @A, @A, 'Transform and Load Fact Tables'
+  
+--TWO RECORDS EXIST - ORIGINAL RECORD WAS DEACTIVATED AND END DATE WAS SET TO NEW RECORDS START DATE 
+ SELECT * 
+  FROM fdw.factclientserviceincident
+ WHERE incidentid = 21601
+ 
+--76,534
+SELECT COUNT(1) AS RecCount
+  FROM FDW.FactClientServiceIncident 
+  
+--TEST PASSED
+
+
+/*
+  TEST 3: RUN FACT UPSERT AGAIN WITH NO CHANGE
+  
+  EXPECTED OUTCOME: NO CHANGE
+*/
+
+DECLARE @A UNIQUEIDENTIFIER = NEWID() 
+   EXEC [FDW].[spUpsertFactClientServiceIncident] @A, @A, 'Transform and Load Fact Tables'
+
+
+ --76,534
+SELECT COUNT(1) AS RecCount
+  FROM FDW.FactClientServiceIncident 
+  
+--TEST PASSED
