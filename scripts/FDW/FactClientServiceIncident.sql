@@ -1,18 +1,18 @@
 SELECT COUNT(1) AS RecCount
   FROM FDW.FactClientServiceIncident
   
---RecCount: 76,533
+--RecCount: 39,239
 
 /*
   TEST 1: CHECK TO SEE IF ANY CSI HAS DUPLICATE CURRENT RECORD FLAGS
 */
 
 SELECT IncidentId
-     , SUM(CONVERT(INT, CurrentRecord))
+     , COUNT(1)
   FROM fdw.factclientserviceincident
  GROUP
     BY IncidentId
-HAVING SUM(CONVERT(INT, CurrentRecord)) > 1
+HAVING COUNT(1) > 1
 
 --TEST PASSED 
 
@@ -20,24 +20,30 @@ HAVING SUM(CONVERT(INT, CurrentRecord)) > 1
 /*
   TEST 2: UPDATE SOURCE RECORDSET TO SHOW AS IF THE CSI WAS RESOLVED THEN RUN FACT UPSERT 
   
-  EXPECTED OUTCOME: ONE ADDITIONAL RECORD ADDED TO FACT TABLE. PREVIOUS INCIDENT RECORD WAS DEACTIVATED AND EFFECTIVEEND DATE WAS SET TO NEW RECORDS START DATE
+  EXPECTED OUTCOME: DimResolutionDateKey and MinutesToResolution are populated within fact table, DimCSIResolutionDateKey updated to 27 (resolved = yes)
 */
+
+--DimResolutionDateKey = NULL
+--Minutes to Resolution = NULL
+--DimCSIResolutionDateKey = 87 (NO)
+ SELECT * 
+   FROM FDW.FactClientServiceIncident
+  WHERE IncidentId = 28122
 
 UPDATE [BAS].[CSI_IncidentMainTable]
    SET dtResolutionDate = GETDATE()
- WHERE IID = 11345
+ WHERE IID = 28122
+
  
 DECLARE @A UNIQUEIDENTIFIER = NEWID() 
    EXEC [FDW].[spUpsertFactClientServiceIncident] @A, @A, 'Transform and Load Fact Tables'
   
---TWO RECORDS EXIST - ORIGINAL RECORD WAS DEACTIVATED AND END DATE WAS SET TO NEW RECORDS START DATE 
- SELECT * 
-  FROM fdw.factclientserviceincident
- WHERE incidentid = 21601
- 
---76,534
-SELECT COUNT(1) AS RecCount
-  FROM FDW.FactClientServiceIncident 
+	--DimResolutionDateKey = 20230201
+	--Minutes to Resolution = 5706474
+	--DimCSIResolutionDateKey = 27 (YES)
+	 SELECT * 
+	   FROM FDW.FactClientServiceIncident
+	  WHERE IncidentId = 28122
   
 --TEST PASSED
 
@@ -48,11 +54,16 @@ SELECT COUNT(1) AS RecCount
   EXPECTED OUTCOME: NO CHANGE
 */
 
+ --39,239
+SELECT COUNT(1) AS RecCount
+  FROM FDW.FactClientServiceIncident 
+
+
 DECLARE @A UNIQUEIDENTIFIER = NEWID() 
    EXEC [FDW].[spUpsertFactClientServiceIncident] @A, @A, 'Transform and Load Fact Tables'
 
 
- --76,534
+ --39,239
 SELECT COUNT(1) AS RecCount
   FROM FDW.FactClientServiceIncident 
   
