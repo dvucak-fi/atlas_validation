@@ -1,25 +1,15 @@
 
 /*	STEP 1 
 	TRUNCATE FDW.FactServiceClearanceMilestone
-	RECORD COUNT BEFORE TRUNCATE: 162501
+	RECORD COUNT BEFORE TRUNCATE: 219,894
 */
 	SELECT COUNT(1) FROM FDW.FactServiceClearanceMilestone
-  TRUNCATE TABLE FDW.FactServiceClearanceMilestone
+    TRUNCATE TABLE FDW.FactServiceClearanceMilestone
+
 
 /*	STEP 2
-	RUN SERVICE CLEARNCE MILESTONE BACKFILL
-	RECORD COUNT: 158283
-
-*/
-
-declare @a uniqueidentifier = newid() 
-exec [FDW].[spUpsertFactServiceClearanceMilestoneBackfill] @a, @a, 'Transform and Load Fact Tables'
-
-SELECT COUNT(1) FROM FDW.FactServiceClearanceMilestone
-
-/*	STEP 3
 	RUN SERVICE CLEARNCE MILESTONE UPSERT
-	RECORD COUNT: 162501
+	RECORD COUNT: 219,892
 */
 
 declare @a uniqueidentifier = newid() 
@@ -28,18 +18,17 @@ exec [FDW].[spUpsertFactServiceClearanceMilestone] @a, @a, 'Transform and Load F
 SELECT COUNT(1) FROM FDW.FactServiceClearanceMilestone
 
 
-
-
-/*	STEP 4
+/*	STEP 3
 	TRUNCATE FDW.FactServiceClearanceAccumulatingSnapshot
-	RECORD COUNT BEFORE TRUNCATE: 162501
+	RECORD COUNT BEFORE TRUNCATE: 219,756
 */
   SELECT COUNT(1) FROM FDW.FactServiceClearanceAccumulatingSnapshot
   TRUNCATE TABLE FDW.FactServiceClearanceAccumulatingSnapshot
   
-/*	STEP 5
+
+/*	STEP 4
 	RUN ACCUMULATING SNAPSHOT BACKFILL
-	RECORD COUNT: 162501
+	RECORD COUNT: 219,754
 */
 
 declare @a uniqueidentifier = newid() 
@@ -47,16 +36,25 @@ exec [FDW].[spUpsertFactServiceClearanceAccumulatingSnapshotBackfill] @a, @a, 'T
 
 SELECT COUNT(1) FROM FDW.FactServiceClearanceAccumulatingSnapshot
 
-/*	STEP 6
+/*	STEP 5
 	RUN ACCUMULATING SNAPSHOT UPSERT
-	RECORD COUNT: 162501
+	RECORD COUNT: 219,754
 */
 
 declare @a uniqueidentifier = newid() 
 exec [FDW].[spUpsertFactServiceClearanceAccumulatingSnapshot] @a, @a, 'Transform and Load Fact Tables'
 
 SELECT COUNT(1) FROM FDW.FactServiceClearanceAccumulatingSnapshot
-	
+
+SELECT * FROM FDW.FactServiceClearanceAccumulatingSnapshot ORDER BY DWCreatedDateTime DESC
+
+SELECT * FROM FDW.FactServiceClearanceAccumulatingSnapshot WHERE CLIENTNUMBER = 1021942 
+ORDER BY 2, 3, 4
+
+SELECT * FROM REF.ClientOnboarding WHERE ClientNumber = 1021942
+SELECT * FROM FDW.FactServiceClearanceMilestone WHERE ClientNumber = 1021942 ORDER BY 1
+
+
 SELECT *
   FROM FDW.FactServiceClearanceMilestone
  WHERE CLIENTNUMBER = 4993589
@@ -65,9 +63,18 @@ SELECT *
   FROM FDW.FactServiceClearanceAccumulatingSnapshot
  WHERE CLIENTNUMBER = 4993589
 
+ SELECT ClientNumber
+      , DimInitialAccountSetupDateKey 
+	  , COUNT(1) 
+   FROM FDW.FactServiceClearanceAccumulatingSnapshot
+  WHERE CurrentRecord = 1 
+ GROUP BY ClientNumber
+      , DimInitialAccountSetupDateKey 
+	HAVING COUNT(1) > 1
 
 
-/*	STEP 4
+
+/*	STEP 6
 	ADD TEST RECORDS TO FACT SERVICE CLEARANCE MILESTONE
 	INSERT COUNT: 2 (ONE FOR CLEARED, ONE FOR FUNDED) 
 	RECORD COUNT: 
