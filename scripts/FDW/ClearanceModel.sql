@@ -179,8 +179,7 @@
 						  FROM FDW.FactServiceAssignment
 						 GROUP BY ClientNumber, DimInitialAccountSetupDateKey
 				   ) AS A
-
-
+				  
 /*
 
 			RECORD COUNT FROM FDW.FactServiceAssignment AFTER BACKFILL:
@@ -391,7 +390,7 @@
 		- CLEARED: 64,529
 		- FUNDED: 11,649
 
-		TOTAL RECORD COUNT BEFORE UPSERT:: 96,334
+		TOTAL RECORD COUNT BEFORE UPSERT:: 87,893
 
 */
 
@@ -420,10 +419,15 @@
 			--  FROM FDW.FactServiceAssignment 
 			-- WHERE ClientNumber = 3908396
 
-			--SELECT * 
-			--  FROM REF.RelationshipManagementAssignment 
-			-- WHERE ClientNumber = 3908396
-			-- order by AssignmentStartDate		
+			SELECT * 
+			  FROM REF.RelationshipManagementAssignment 
+			 WHERE ClientNumber = 3908396
+			 order by AssignmentStartDate		
+
+			SELECT * 
+			  FROM [REF].[vwRelationshipManagementAssignmentWindow]
+			 WHERE ClientNumber = 3908396
+			 order by AssignmentwINDOWStartDate		
 
 			 INSERT 
 			   INTO REF.RelationshipManagementAssignment (
@@ -459,7 +463,7 @@
 				   ,'9999-12-31 00:00:00.000'	
 				   ,IsCanceledAssignment	
 				   ,IsCompletedAssignment	
-				   ,IsEndOfDayAssignment	
+				   ,1	
 				   ,DWCreatedDateTime	
 				   ,DWUpdatedDateTime	
 				   ,ETLJobProcessRunId	
@@ -513,7 +517,7 @@
 		- CLEARED: 64,529 --> 64,529
 		- FUNDED: 11,649 --> 11,649
 
-		TOTAL RECORD COUNT BEFORE UPSERT: 96,334 --> 96,335
+		TOTAL RECORD COUNT BEFORE UPSERT: 87,893 --> 87,894
 
 		TEST RESULT: PASS
 
@@ -577,3 +581,8 @@ SELECT ClientNUmber
 	 , AssignmentStartDate
 	 , AssignedToUserId 
 HAVING COUNT(1) > 1
+
+
+SELECT * 
+  FROM FDW.FACTSERVICEASSIGNMENT 
+  WHERE ClientNUmber = 6263462
