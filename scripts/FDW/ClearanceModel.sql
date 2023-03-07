@@ -339,6 +339,21 @@
 			  FROM FDW.FactServiceClearanceMilestone
 
 
+
+			--RUN UPSERT
+			declare @a uniqueidentifier = newid() 
+			exec [FDW].spUpsertFactServiceClearanceAccumulatingSnapshot @a, @a, 'Transform and Load Fact Tables'
+
+	        --CHECK RECORD COUNTS
+			SELECT 
+				   COUNT(1) AS IASCount			   
+				 , SUM(CASE WHEN DimClearanceDateKey IS NOT NULL THEN 1 ELSE 0 END) AS ClearanceCount
+				 , SUM(CASE WHEN DimResellDateKey IS NOT NULL THEN 1 ELSE 0 END) AS ResellCount 
+			  FROM FDW.FactServiceClearanceAccumulatingSnapshot
+			 WHERE CurrentRecord = 1 
+
+
+
 /*
 	STEP 13 - REPEAT SAME PROCESS FOR FactServiceAssignment NOW THAT A NEW CLIENT "CLEARED"
 
