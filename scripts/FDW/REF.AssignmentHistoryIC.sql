@@ -61,6 +61,21 @@ select *
               from REF.AssignmentHistoryIC) as a 
     where a.MatchesNextRowHash = 1
 
+/*
+	TEST INCREMENTAL CHANGES BY 
+*/
 
+select * from ref.assignmenthistoryic where clientnumber_iris = '22' ORDER BY ASSIGNMENTSTARTDATE
 
+UPDATE Iris.fi_relationshipmanagementBase
+SET fi_AssignedToUserId = 'C69AA14A-BB6A-E411-93FD-0025B50B0088' --Seth Groener 
+WHERE FI_CONTACTID = '33CFBDB4-636C-E411-940A-0025B50A007D'
 
+UPDATE Iris.fi_relationshipmanagementBase
+SET fi_AssignedToUserId = '2F934267-9224-E711-9415-0025B50B0059' --Cosmin Bugnar
+WHERE FI_CONTACTID = '33CFBDB4-636C-E411-940A-0025B50A007D'
+
+DECLARE @A UNIQUEIDENTIFIER = NEWID()
+EXEC [REF].[spUpsertAssignmentHistoryICIris] @A, @A, 'Tranform and Load Reference Tables'
+
+select * from ref.assignmenthistoryic where clientnumber_iris = '22' ORDER BY ASSIGNMENTSTARTDATE
