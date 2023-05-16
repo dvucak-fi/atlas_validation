@@ -1230,6 +1230,7 @@ SELECT *
       AND ClientType = 'Client - Trading'
       AND ClientClearanceDate IS NOT NULL
 
+
 --Check for duplicate active client records: PASS
    select ISNULL(ClientId_Iris, HouseholdUID)
        , count(*)
@@ -1285,7 +1286,3 @@ select *
                    END MatchesNextRowHash
               from #DimClientHousehold) as a 
     where a.MatchesNextRowHash = 1
-
-
-   
-
