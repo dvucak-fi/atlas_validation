@@ -180,91 +180,91 @@ WITH (DISTRIBUTION = HASH(HouseholdUID), CLUSTERED COLUMNSTORE INDEX)
 
 
  --Insert Unknown Member Record
-IF NOT EXISTS (SELECT 1 FROM #DimClientHousehold WHERE DimClientHouseholdKey = @UnknownNumberValue)
+--IF NOT EXISTS (SELECT 1 FROM #DimClientHousehold WHERE DimClientHouseholdKey = @UnknownNumberValue)
 
-BEGIN
+--BEGIN
 
-    SET IDENTITY_INSERT #DimClientHousehold ON
+--    SET IDENTITY_INSERT #DimClientHousehold ON
           
-    INSERT INTO #DimClientHousehold (
-		    [DimClientHouseholdKey] 
-		  , [HouseholdUID] 
-		  , [HouseholdId] 
-		  , [ClientId_Iris] 
-		  , [ClientNumber_Iris] 
-		  , [ClientFirstName]		  
-		  , [ClientLastName]
-		  , [ClientFullName] 
-		  , [ServiceProduct] 
-		  , [ClientType] 		
-		  , [ClientSubType] 	
-		  , [ClientClearanceDate]	
-		  , [ClientTradingDate]	 
-		  , [StrengthCode] 
-		  , [DimStrengthCodeKey] 
-		  , [ContactFrequency] 	
-		  , [Gender] 
-		  , [MaritalStatus]	
-		  , [RetirementStatus] 
-		  , [EmploymentStatus] 
-		  , [Industry] 
-		  , [Occupation] 	
-		  , [ResidenceCountry] 
-		  , [ContractCountry] 
-		  , [ContractEntity] 
-		  , [CurrencyCode] 
-		  , [SystemOfRecord] 
-		  , [RowHash] 
-		  , [EffectiveStartDate] 
-		  , [EffectiveEndDate] 
-		  , [CurrentRecord] 
-		  , [DWCreatedDateTime]
-		  , [DWUpdatedDateTime] 
-		  , [ETLJobProcessRunId] 
-		  , [ETLJobSystemRunId] 
-    )
+--    INSERT INTO #DimClientHousehold (
+--		    [DimClientHouseholdKey] 
+--		  , [HouseholdUID] 
+--		  , [HouseholdId] 
+--		  , [ClientId_Iris] 
+--		  , [ClientNumber_Iris] 
+--		  , [ClientFirstName]		  
+--		  , [ClientLastName]
+--		  , [ClientFullName] 
+--		  , [ServiceProduct] 
+--		  , [ClientType] 		
+--		  , [ClientSubType] 	
+--		  , [ClientClearanceDate]	
+--		  , [ClientTradingDate]	 
+--		  , [StrengthCode] 
+--		  , [DimStrengthCodeKey] 
+--		  , [ContactFrequency] 	
+--		  , [Gender] 
+--		  , [MaritalStatus]	
+--		  , [RetirementStatus] 
+--		  , [EmploymentStatus] 
+--		  , [Industry] 
+--		  , [Occupation] 	
+--		  , [ResidenceCountry] 
+--		  , [ContractCountry] 
+--		  , [ContractEntity] 
+--		  , [CurrencyCode] 
+--		  , [SystemOfRecord] 
+--		  , [RowHash] 
+--		  , [EffectiveStartDate] 
+--		  , [EffectiveEndDate] 
+--		  , [CurrentRecord] 
+--		  , [DWCreatedDateTime]
+--		  , [DWUpdatedDateTime] 
+--		  , [ETLJobProcessRunId] 
+--		  , [ETLJobSystemRunId] 
+--    )
     
-    SELECT -- Unknown member record
-            @UnknownNumberValue AS DimClientHouseholdKey 
-		  , @UnknownNumberValue AS HouseholdUID 
-		  , @UnknownNumberValue AS HouseholdId
-          , @UnknownGuid AS ClientId_Iris 
-          , @UnknownNumberValue AS ClientNumber_Iris
-          , @UnknownTextValue AS ClientFirstName
-          , @UnknownTextValue AS ClientLastName		  
-		  , @UnknownTextValue AS ClientFullName
-          , @UnknownTextValue AS ServiceProduct
-          , @UnknownTextValue AS ClientType 
-          , @UnknownTextValue AS ClientSubType
-		  , NULL AS ClientClearanceDate
-          , NULL AS ClientTradingDate
-          , @UnknownTextValue AS StrengthCode
-          , @UnknownNumberValue AS DimStrengthCodeKey
-          , @UnknownTextValue AS ContactFrequency 
-          , @UnknownTextValue AS Gender 
-          , @UnknownTextValue AS MaritalStatus
-          , @UnknownTextValue AS RetirementStatus
-          , @UnknownTextValue AS EmploymentStatus
-          , @UnknownTextValue AS Industry
-          , @UnknownTextValue AS Occupation
-          , @UnknownTextValue AS ResidenceCountry 
-          , @UnknownTextValue AS ContractCountry 
-          , @UnknownTextValue AS ContractEntity 
-          , @UnknownTextValueAbbreviated AS CurrencyCode
-          , @UnknownTextValue AS SystemOfRecord 
-          , NULL AS RowHash
-          , @MinDateValue AS EffectiveStartDate
-          , @MaxDateValue AS EffectiveEndDate
-          , 1 AS CurrentRecord
-          , @DWUpdatedDateTime AS DWCreatedDateTime
-          , @DWUpdatedDateTime AS DWUpdatedDateTime
-          , @UnknownGuId AS ETLJobProcessRunId
-          , @UnknownGuId AS ETLJobSystemRunId
+--    SELECT -- Unknown member record
+--            @UnknownNumberValue AS DimClientHouseholdKey 
+--		  , @UnknownNumberValue AS HouseholdUID 
+--		  , @UnknownNumberValue AS HouseholdId
+--          , @UnknownGuid AS ClientId_Iris 
+--          , @UnknownNumberValue AS ClientNumber_Iris
+--          , @UnknownTextValue AS ClientFirstName
+--          , @UnknownTextValue AS ClientLastName		  
+--		  , @UnknownTextValue AS ClientFullName
+--          , @UnknownTextValue AS ServiceProduct
+--          , @UnknownTextValue AS ClientType 
+--          , @UnknownTextValue AS ClientSubType
+--		  , NULL AS ClientClearanceDate
+--          , NULL AS ClientTradingDate
+--          , @UnknownTextValue AS StrengthCode
+--          , @UnknownNumberValue AS DimStrengthCodeKey
+--          , @UnknownTextValue AS ContactFrequency 
+--          , @UnknownTextValue AS Gender 
+--          , @UnknownTextValue AS MaritalStatus
+--          , @UnknownTextValue AS RetirementStatus
+--          , @UnknownTextValue AS EmploymentStatus
+--          , @UnknownTextValue AS Industry
+--          , @UnknownTextValue AS Occupation
+--          , @UnknownTextValue AS ResidenceCountry 
+--          , @UnknownTextValue AS ContractCountry 
+--          , @UnknownTextValue AS ContractEntity 
+--          , @UnknownTextValueAbbreviated AS CurrencyCode
+--          , @UnknownTextValue AS SystemOfRecord 
+--          , NULL AS RowHash
+--          , @MinDateValue AS EffectiveStartDate
+--          , @MaxDateValue AS EffectiveEndDate
+--          , 1 AS CurrentRecord
+--          , @DWUpdatedDateTime AS DWCreatedDateTime
+--          , @DWUpdatedDateTime AS DWUpdatedDateTime
+--          , @UnknownGuId AS ETLJobProcessRunId
+--          , @UnknownGuId AS ETLJobSystemRunId
 
 
-    SET IDENTITY_INSERT #DimClientHousehold OFF
+--    SET IDENTITY_INSERT #DimClientHousehold OFF
 
-END
+--END
 
 
 --BEGIN TRANSACTION -- Begin of Transaction scope. Transaction will be committed after each batch. 
@@ -1208,3 +1208,5 @@ UPDATE #DimClientHousehold
 
 --END
 --GO
+
+
