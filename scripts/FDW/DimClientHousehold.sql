@@ -1210,3 +1210,82 @@ UPDATE #DimClientHousehold
 --GO
 
 
+
+/****
+    FDW.DimClientHousehold Validaiton 
+***/
+
+
+--Check for unknown member row: PASS
+SELECT * 
+  FROM #DimClientHousehold
+  where DimClientHouseholdKey = -1
+
+
+--Check for active client count: 94,211 (not sure if this is correct)
+    --Daily AUM Summary US PCG: 91,220     
+   SELECT COUNT(*) 
+     FROM #DimClientHousehold
+    WHERE CurrentRecord = 1 
+      AND ClientType = 'Client - Trading'
+      AND ClientClearanceDate IS NOT NULL
+
+--Check for duplicate active client records: PASS
+   select ISNULL(ClientId_Iris, HouseholdUID)
+       , count(*)
+    from #DimClientHousehold
+    where CurrentRecord = 1 
+    group by ISNULL(ClientId_Iris, HouseholdUID)
+    having count(*) > 1
+
+--Check for duplicate client/start date records: PASS
+   select ISNULL(ClientId_Iris, HouseholdUID)
+        , EffectiveStartDate
+        , count(*)
+    from #DimClientHousehold
+    where CurrentRecord = 1 
+    group by ISNULL(ClientId_Iris, HouseholdUID)
+        , EffectiveStartDate
+    having count(*) > 1
+
+
+--Check for Start/End dates that don't line up: PASS
+select * 
+  from ( 
+            select 
+                   ISNULL(ClientId_Iris, HouseholdUID) as partitionkey
+                 , EffectiveEndDate
+                 , LEAD (EffectiveStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(ClientId_Iris, HouseholdUID) ORDER BY EffectiveStartDate) AS NextStartDate
+                 , CASE 
+                    --WHEN DimCLientKey = -1 
+                    --THEN 1 
+                    WHEN EffectiveEndDate = LEAD (EffectiveStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(ClientId_Iris, HouseholdUID) ORDER BY EffectiveStartDate)
+                    THEN 1 
+                    ELSE 0 
+                   END EndDateMatchesNextStartDate
+              from #DimClientHousehold
+              ) as a 
+    where a.EndDateMatchesNextStartDate = 0 
+
+--Check for duplicate RowHashs: PASS
+select * 
+  from ( 
+            select 
+                   ISNULL(ClientId_Iris, HouseholdUID) as partitionkey
+                 , RowHash
+                 , LEAD (RowHash, 1, HASHBYTES('SHA2_256', '')) OVER (PARTITION BY ISNULL(ClientId_Iris, HouseholdUID) ORDER BY EffectiveStartDate) AS NextRowHash
+                 , EffectiveStartDate
+				 , EffectiveEndDate
+				 , CASE 
+                    --WHEN DimCLientKey = -1 
+                    --THEN 0
+                    WHEN RowHash = LEAD (RowHash, 1, HASHBYTES('SHA2_256', '')) OVER (PARTITION BY ISNULL(ClientId_Iris, HouseholdUID) ORDER BY EffectiveStartDate)
+                    THEN 1 
+                    ELSE 0 
+                   END MatchesNextRowHash
+              from #DimClientHousehold) as a 
+    where a.MatchesNextRowHash = 1
+
+
+   
+
