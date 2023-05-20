@@ -74,52 +74,84 @@ SELECT @DataSourceMemberId = DM.DataSourceMemberId
     ON DM.DataSourceGroupId = DG.DataSourceGroupId
  WHERE DM.DataSourceMemberName = @DataSourceMemberName
    AND DG.DataSourceGroupName = @DataSourceGroupName
-
-INSERT INTO [MDR].[DataProcessLog]
-    (
-        [DataProcessLogId]
-      , [DataSourceMemberId]
-      , [FileName]
-      , [StorageAccountName]
-      , [PrimaryFolderName]
-      , [RelativeFolderPathFromRoot]
-      , [FilePathAbsolute]
-      , [StorageSystemPrefix]
-      , [FileDateStampSuffix]
-      , [ExtractStartDateTime]
-      , [ExtractEndDateTime]
-      , [DataFileProcessStageId]
-      , [DataProcessStageId]
-	  , [RecordCount]
-      , [ExtractQuery]
-      , [DWLoadStartDateTime]
-      , [DWLoadEndDateTime]
-      , [ETLJobProcessRunId]
-      , [ETLJobSystemRunId]
-      )
 	  
+;WITH InsertPrep AS ( 
 
- SELECT @DataProcessLogId AS DataProcessLogId
-      , @DataSourceMemberId AS DataSourceMemberId
-      , @FileNameParsed AS FileNameFromDataLake --CHANGE DATE
-      , 'a00001datalakestadev3.dfs.core.windows.net' AS StorageAccountName
-      , 'raw' AS PrimaryFolderName
-      , @RelativeFolderPathFromRoot AS FilePathInDataLake--CHANGE DATE
-      , concat('abfss://raw@a00001datalakestadev3.dfs.core.windows.net/', @NewFileName) AS FilePathAbsolute
-      , 'abfss://' AS StorageSystemPrefix
-      , NULL AS FileDateStampSuffix
-      , @ExtractStartDateTime
-      , @ExtractEndDateTime
-      , 60 
-      , 60
-	  , 1
-      , NULL
-      , @DWCreatedDateTime AS DWLoadStartDateTime 
-      , @DWCreatedDateTime AS DWLoadStartDateTime 
-      , @ETLJobProcessRunId
-      , @ETLJobSystemRunId
+	 SELECT @DataProcessLogId AS DataProcessLogId
+		  , @DataSourceMemberId AS DataSourceMemberId
+		  , @FileNameParsed AS [FileName]
+		  , 'a00001datalakestadev3.dfs.core.windows.net' AS StorageAccountName
+		  , 'raw' AS PrimaryFolderName
+		  , @RelativeFolderPathFromRoot AS RelativeFolderPathFromRoot
+		  , concat('abfss://raw@a00001datalakestadev3.dfs.core.windows.net/', @NewFileName) AS FilePathAbsolute
+		  , 'abfss://' AS StorageSystemPrefix
+		  , NULL AS FileDateStampSuffix
+		  , @ExtractStartDateTime AS ExtractStartDateTime
+		  , @ExtractEndDateTime AS ExtractEndDateTime
+		  , 60 AS DataFileProcessStageId
+		  , 60 AS DataProcessStageId
+		  , 1 AS RecordCount
+		  , NULL AS ExtractQuery
+		  , @DWCreatedDateTime AS DWLoadStartDateTime 
+		  , @DWCreatedDateTime AS DWLoadEndDateTime 
+		  , @ETLJobProcessRunId AS ETLJobProcessRunId
+		  , @ETLJobSystemRunId AS ETLJobSystemRunId
+
+)
+
+     INSERT 
+       INTO [MDR].[DataProcessLog] ( 
+			[DataProcessLogId]
+		  , [DataSourceMemberId]
+		  , [FileName]
+		  , [StorageAccountName]
+		  , [PrimaryFolderName]
+		  , [RelativeFolderPathFromRoot]
+		  , [FilePathAbsolute]
+		  , [StorageSystemPrefix]
+		  , [FileDateStampSuffix]
+		  , [ExtractStartDateTime]
+		  , [ExtractEndDateTime]
+		  , [DataFileProcessStageId]
+		  , [DataProcessStageId]
+		  , [RecordCount]
+		  , [ExtractQuery]
+		  , [DWLoadStartDateTime]
+		  , [DWLoadEndDateTime]
+		  , [ETLJobProcessRunId]
+		  , [ETLJobSystemRunId]
+      )
+
+	 SELECT SRC.DataProcessLogId
+		  , SRC.DataSourceMemberId
+		  , SRC.[FileName]
+		  , SRC.StorageAccountName
+		  , SRC.PrimaryFolderName
+		  , SRC.RelativeFolderPathFromRoot
+		  , SRC.FilePathAbsolute
+		  , SRC.StorageSystemPrefix
+		  , SRC.FileDateStampSuffix
+		  , SRC.ExtractStartDateTime
+		  , SRC.ExtractEndDateTime
+		  , SRC.DataFileProcessStageId
+		  , SRC.DataProcessStageId
+		  , SRC.RecordCount
+		  , SRC.ExtractQuery
+		  , SRC.DWLoadStartDateTime
+		  , SRC.DWLoadEndDateTime
+		  , SRC.ETLJobProcessRunId
+		  , SRC.ETLJobSystemRunId
+	   FROM InsertPrep AS SRC
+	   LEFT
+	   JOIN MDR.DataProcessLog AS TGT
+	     ON SRC.DataSourceMemberId = TGT.DataSourceMemberId
+        AND SRC.[FileName] = TGT.[FileName]
+	  WHERE TGT.DataSourceMemberId IS NULL
+	  
+	  DECLARE @DSG NVARCHAR(100) = CASE WHEN @DataSourceGroupName = 'PCG_SFDC' THEN 'PcgSf' ELSE @DataSourceGroupName END 
+	  DECLARE @OdsProcCall NVARCHAR(1000) = CONCAT('DECLARE @a UNIQUEIDENTIFIER = NEWID() EXEC [ODS].[spUpsert_', @DSG, '_', @DataSourceMemberName, '] @a, @a, ''Transform and Load Operational Tables''')
 
 
-
-
+	  --ods upsert
+	  EXEC sp_executesql @OdsProcCall
 	  
