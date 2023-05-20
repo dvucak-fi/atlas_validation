@@ -12,7 +12,7 @@ DECLARE @DataSourceMemberName NVARCHAR(100) = 'dbo.ContactBase'
 DECLARE @DataSourceGroupName NVARCHAR(100) = 'Iris'  
 
 --FILE NAME FROM NOTEBOOK
-DECLARE @NewFileName NVARCHAR(200) = 'FICRM_MSCRM/dbo/ContactBase/2023/05/20/04:36:23/part-00000-b0954a25-a8e9-4ba4-b572-eb3310b2daaa-c000.snappy.parquet'   
+DECLARE @NewFileName NVARCHAR(200) = 'FICRM_MSCRM/dbo/ContactBase/2023/05/20/04:48:16/part-00000-850aab6a-9271-4663-8e50-b23da672cffe-c000.snappy.parquet'   
 
 
 
@@ -157,3 +157,10 @@ SELECT @DataSourceMemberId = DM.DataSourceMemberId
 	  --ods upsert
 	  EXEC sp_executesql @OdsProcCall
 	  
+
+
+	 -- SELECT * 
+	 --   FROM MDR.DATAPROCESSLOG
+		--WHERE DataSourceMemberId = 756
+
+
