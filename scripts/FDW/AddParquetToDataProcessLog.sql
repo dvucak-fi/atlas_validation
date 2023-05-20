@@ -8,11 +8,11 @@
 */
 
 --ADD DATA SOURCE MEMBER AND DATA SOURCE GROUP NAMES
-DECLARE @DataSourceMemberName NVARCHAR(100) = 'Account' 
-DECLARE @DataSourceGroupName NVARCHAR(100) = 'PCG_SFDC'  
+DECLARE @DataSourceMemberName NVARCHAR(100) = 'dbo.ContactBase' 
+DECLARE @DataSourceGroupName NVARCHAR(100) = 'Iris'  
 
 --FILE NAME FROM NOTEBOOK
-DECLARE @NewFileName NVARCHAR(200) = 'PCG_SFDC/sObject/Account/2023/05/20/03:13:44/part-00000-eead594c-87bf-4971-b7e8-45dd29e850cd-c000.snappy.parquet'   
+DECLARE @NewFileName NVARCHAR(200) = 'FICRM_MSCRM/dbo/ContactBase/2023/05/20/04:36:23/part-00000-b0954a25-a8e9-4ba4-b572-eb3310b2daaa-c000.snappy.parquet'   
 
 
 
@@ -147,9 +147,11 @@ SELECT @DataSourceMemberId = DM.DataSourceMemberId
 	     ON SRC.DataSourceMemberId = TGT.DataSourceMemberId
         AND SRC.[FileName] = TGT.[FileName]
 	  WHERE TGT.DataSourceMemberId IS NULL
+
 	  
 	  DECLARE @DSG NVARCHAR(100) = CASE WHEN @DataSourceGroupName = 'PCG_SFDC' THEN 'PcgSf' ELSE @DataSourceGroupName END 
-	  DECLARE @OdsProcCall NVARCHAR(1000) = CONCAT('DECLARE @a UNIQUEIDENTIFIER = NEWID() EXEC [ODS].[spUpsert_', @DSG, '_', @DataSourceMemberName, '] @a, @a, ''Transform and Load Operational Tables''')
+	  DECLARE @DSM NVARCHAR(100) = REPLACE(@DataSourceMemberName, 'dbo.', '')
+	  DECLARE @OdsProcCall NVARCHAR(1000) = CONCAT('DECLARE @a UNIQUEIDENTIFIER = NEWID() EXEC [ODS].[spUpsert_', @DSG, '_', @DSM, '] @a, @a, ''Transform and Load Operational Tables''')
 
 
 	  --ods upsert
