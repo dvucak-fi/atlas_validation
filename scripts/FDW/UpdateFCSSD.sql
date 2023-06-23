@@ -191,10 +191,6 @@ WITH
     JOIN REF.CRMClientMapping AS SFDC 
       ON CB.fi_Id_search = SFDC.ClientNumber_IRIS
 
-   --TESTING: TO BE REMOVED!!
-   --WHERE CB.fi_Id_Search = 3999732
-
-
 ) 
 
 , LastDailyChange AS ( 
@@ -391,9 +387,7 @@ WITH
 	   AND SMB.ObjectTypeCode = 10090 --fi_servicetypeBase
 	 WHERE STDB.fi_Description = 'Portfolio Counselor'  
 	   AND SMB.[Value] <> 'Canceled'  
-	   
-	    --TESTING: TO BE REMOVED!!
-       --and CB.fi_Id_Search = 3999732
+	   	    
 ) 
 
 , PCCallCycles AS ( 
@@ -470,11 +464,6 @@ WITH
 	    ON SRC.ClientId = TGT.ClientId
 	   AND SRC.CalendarDate = TGT.CalendarDate 
 	 WHERE SRC.ClientAssetsType IN ('HAUM', 'HLNW')
-
-	 --TESTING: TO BE REMOVED!!
-	 --AND SRC.ClientNumber = 3999732
-
-
 
 
 
@@ -883,6 +872,3 @@ WITH
 	  JOIN FDW.FactClientSnapshotDaily AS TGT
 	    ON SRC.DimDateKey = TGT.DimDateKey
 	   AND SRC.ClientId = TGT.ClientId
-
-
-
