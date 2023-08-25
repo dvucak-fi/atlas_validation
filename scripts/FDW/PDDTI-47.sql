@@ -31,7 +31,7 @@ SELECT *
 	STEP 4: RUN POST DEPLOYMENT SCRIPT TO ADD DimCallCycle FK and New CallCycleContact Measure
 */
 
-CREATE TABLE FDW.FactClientSnapShotDaily_NEW
+			CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 			WITH
 			(
 				DISTRIBUTION = HASH ( [DimClientKey] ),
@@ -48,7 +48,7 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 				 , DimAgeGroupKey
 				 , DimKYCStatusKey
 				 , DimPeerGroupKey
-				 , -1 AS DimCallCycleKey
+				 , -1 AS DimContactFrequencyKey
 				 , ClientId
 				 , ClientNumber
 				 , AssetsUnderManagementUSD
@@ -64,7 +64,7 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 	             , DaysSinceLastAttempt
 	             , DaysSinceLastVirtualMeeting
 	             , DaysSinceLastInPersonMeeting
-				 , NULL AS CallCycleContact
+				 , NULL AS ContactFrequencyViolation
 				 , ClientCount
 				 , DWCreatedDateTime
 				 , DWUpdatedDateTime
@@ -96,7 +96,7 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 				 , DimAgeGroupKey
 				 , DimKYCStatusKey
 				 , DimPeerGroupKey
-				 , DimCallCycleKey
+				 , DimContactFrequencyKey
 				 , ClientId
 				 , ClientNumber
 				 , AssetsUnderManagementUSD
@@ -112,7 +112,7 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 	             , DaysSinceLastAttempt
 	             , DaysSinceLastVirtualMeeting
 	             , DaysSinceLastInPersonMeeting
-				 , CallCycleContact
+				 , ContactFrequencyViolation
 				 , ClientCount
 				 , DWCreatedDateTime
 				 , DWUpdatedDateTime
@@ -128,17 +128,17 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 	STEP 5: CHECK CALL CYCLE COUNTS. ALL DimCallCycleKey FKs SHOULD BE -1
 */
 
-	SELECT F.DimCallCycleKey
-		 , CC.CallCycle
+	SELECT F.DimContactFrequencyKey
+		 , CF.ContactFrequencyInDays
 		 , COUNT(1) AS RecCount
 	  FROM FDW.FactClientSnapshotDaily F
 	  LEFT
-	  JOIN FDW.DimCallCycle AS CC 
-		ON F.DimCallCycleKey = CC.DimCallCycleKey
-	 --WHERE F.DimDateKey = 20230821
+	  JOIN FDW.DimContactFrequency AS CF 
+		ON F.DimContactFrequencyKey = CF.DimContactFrequencyKey
+	 WHERE F.DimDateKey = 20230821
 	 GROUP 
-	    BY F.DimCallCycleKey
-         , CallCycle
+	    BY F.DimContactFrequencyKey
+         , CF.ContactFrequencyInDays
 	 ORDER 
 	    BY COUNT(1) DESC
 
@@ -157,17 +157,17 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 */
 
 
-	SELECT F.DimCallCycleKey
-		 , CC.CallCycle
+	SELECT F.DimContactFrequencyKey
+		 , CF.ContactFrequencyInDays
 		 , COUNT(1) AS RecCount
 	  FROM FDW.FactClientSnapshotDaily F
 	  LEFT
-	  JOIN FDW.DimCallCycle AS CC 
-		ON F.DimCallCycleKey = CC.DimCallCycleKey
-	 --WHERE F.DimDateKey = 20230821
+	  JOIN FDW.DimContactFrequency AS CF 
+		ON F.DimContactFrequencyKey = CF.DimContactFrequencyKey
+	 WHERE F.DimDateKey = 20230821
 	 GROUP 
-	    BY F.DimCallCycleKey
-         , CallCycle
+	    BY F.DimContactFrequencyKey
+         , CF.ContactFrequencyInDays
 	 ORDER 
 	    BY COUNT(1) DESC
 
@@ -212,3 +212,10 @@ CREATE TABLE FDW.FactClientSnapShotDaily_NEW
 			 CHECK NEW RECORD COUNT: 229,203,419
 
 */
+
+	TRUNCATE TABLE FDW.FactClientSnapshotDaily
+
+	DECLARE @A UNIQUEIDENTIFIER = NEWID() 
+	EXEC [FDW].[spUpsertFactClientSnapshotDailyBackfill] @A, @A, 'Transform and Load Fact Tables'
+
+	SELECT COUNT(1) FROM FDW.FactClientSnapshotDaily
