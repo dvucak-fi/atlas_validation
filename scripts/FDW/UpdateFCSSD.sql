@@ -1,5 +1,6 @@
 DECLARE @TODAY DATE  = convert(date,getdate() AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time')
 DECLARE @YESTERDAY DATE =  DateAdd(DAY,-1,@TODAY)
+DECLARE @DWUpdatedDateTime DATETIME = GETDATE()
 
 DECLARE @UnknownTextValue NVARCHAR(512)
        ,@UnknownTextValueAbbreviated NVARCHAR(10)
@@ -58,32 +59,13 @@ SELECT TOP 1 @DefaultMoneyValue = CONVERT(MONEY,[Value])
  WHERE DF.Name = 'DefaultMoneyValue'
 
  
-IF OBJECT_ID('tempdb..#ContactAttributes') IS NOT NULL DROP TABLE #ContactAttributes
-
-CREATE TABLE #ContactAttributes (
-	[HouseholdUID] NVARCHAR(255) NULL,
-	[HouseholdId] NVARCHAR(255) NULL,
-    [ClientID] UNIQUEIDENTIFIER NULL,
-	[ClientNumber] INT NULL,	
-	[ServiceProduct] NVARCHAR(255) NULL,
-	[ClientType] NVARCHAR(100) NULL,
-	[Bday] DATE,
-	[EffectiveStartDate] DATETIME,
-	[EffectiveEndDate] DATETIME,
-	[CurrentRecord] INT NULL 
-)
-WITH (DISTRIBUTION = HASH(ClientID), CLUSTERED COLUMNSTORE INDEX) 
-
-
 IF OBJECT_ID('tempdb..#DailyCallCycleAttributes') IS NOT NULL DROP TABLE #DailyCallCycleAttributes
 
 CREATE TABLE #DailyCallCycleAttributes (
 	[CalendarDate] DATE, 
 	[HouseholdUID] NVARCHAR(255),
-	[HouseholdId] NVARCHAR(255),
     [ClientID] UNIQUEIDENTIFIER,
 	[ClientNumber] INT,	
-	[ClientPartitionKey] NVARCHAR(255),
 	[ClientAge] INT,
 	[ServiceProduct] NVARCHAR(255),
 	[ClientType] NVARCHAR(100),	
@@ -93,10 +75,7 @@ CREATE TABLE #DailyCallCycleAttributes (
 	[PCCallCycle] INT, 
 	[ExtendedCallCycle] INT,
 	[HAUM_HLNW] INT,
-	[CustomCallCycle] INT,
-	[EffectiveStartDate] DATETIME,
-	[EffectiveEndDate] DATETIME,
-	[CurrentRecord] INT NULL 
+	[CustomCallCycle] INT
 )
 WITH (DISTRIBUTION = HASH(ClientID), CLUSTERED COLUMNSTORE INDEX) 
 
@@ -105,10 +84,8 @@ IF OBJECT_ID('tempdb..#DailyCallCycle') IS NOT NULL DROP TABLE #DailyCallCycle
 CREATE TABLE #DailyCallCycle (
 	[CalendarDate] DATE, 
 	[HouseholdUID] NVARCHAR(255),
-	[HouseholdId] NVARCHAR(255),
     [ClientID] UNIQUEIDENTIFIER,
 	[ClientNumber] INT,	
-	[ClientPartitionKey] NVARCHAR(255),
 	[WealthbuilderCallCycle] INT,
 	[WealthbuilderOver60CallCycle] INT,
 	[TradingClientCallCycle] INT, 
@@ -146,9 +123,8 @@ CREATE TABLE #DailyCallCycleContact (
 	, ClientId UniqueIdentifier
 	, ClientNumber Int
 	, FinalCallCycle Int 
-	, DimCallCycleKey Int
-	, CallCycleContact Int
-	, ContactLag Int
+	, DimContactFrequencyKey Int
+	, ContactFrequencyViolation Int
 )
 WITH
 (
@@ -157,209 +133,42 @@ WITH
 )
 
 
-;WITH IrisHistory AS ( 
-
-  SELECT ISNULL(SFDC.HouseholdUID, @UnknownTextValue) AS HouseholdUID
-       , ISNULL(SFDC.HouseholdId, @UnknownTextValue) AS HouseholdId
-	   , CA.[fi_contactid] AS ClientId
-       , CB.fi_Id_Search AS ClientNumber
-	   , SP.[fi_Name] AS ServiceProduct
-	   , CType.[Value] AS ClientType	 
-	   , CONVERT(DATE, CB.fi_birthdate) AS Bday
-	   , CONVERT(DATETIME, CA.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') AS CreatedOn  --CONVERT DATES TO PST
-	   , ROW_NUMBER() OVER (PARTITION BY CA.[fi_contactid], CONVERT(DATE,  CA.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') ORDER BY CA.fi_Id DESC, CONVERT(DATETIME, CA.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') DESC) AS DayRowNum
-
-	FROM Iris.fi_contactauditlogBase AS CA	
-	
-    JOIN Iris.ContactBase AS CB ON CA.fi_ContactId = CB.ContactId   
-
-	--INNER JOIN TO RM ENTITY TO ONLY INCLUDE CLIENTS HAVE HAVE BEEN WITIN RELATIONSHIP MANAGEMENT
-    JOIN Iris.fi_relationshipmanagementBase AS RM 
-      ON CB.ContactId = RM.fi_ContactId
-
-    LEFT 
-    JOIN Iris.fi_serviceproductBase AS SP 
-      ON SP.fi_serviceproductId = CA.fi_serviceproductid
-
-    LEFT 
-    JOIN Iris.StringMapBase CType  
-      ON CType.AttributeValue = CA.fi_customertypecode
-     AND CType.ObjectTypeCode = 10079 --fi_contactauditlogBase
-     AND CType.AttributeName = 'fi_customertypecode'
-
-    LEFT 
-    JOIN REF.CRMClientMapping AS SFDC 
-      ON CB.fi_Id_search = SFDC.ClientNumber_IRIS
-
-) 
-
-, LastDailyChange AS ( 
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientId
-	   , ClientNumber
-	   , ServiceProduct
-	   , ClientType
-	   , Bday
-	   , CreatedOn
-	FROM IrisHistory  
-   WHERE DayRowNum = 1 --LAST CHANGE IN DAY 
-
-) 
-
-, AttributeGroups AS ( 
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientId
-	   , ClientNumber
-	   , ServiceProduct
-	   , COUNT(ServiceProduct) OVER (PARTITION BY ClientID ORDER BY CreatedOn) AS GrpServiceProduct
-	   , ClientType
-	   , COUNT(ClientType) OVER (PARTITION BY ClientID ORDER BY CreatedOn) AS GrpClientType
-	   , Bday
-	   , CONVERT(DATE,CreatedOn) CreatedOn
-	FROM LastDailyChange  
-
-) 
-
-, ClientHistory AS ( 
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientID 
-	   , ClientNumber
-	   , FIRST_VALUE(ServiceProduct) OVER (PARTITION BY ClientID, GrpServiceProduct ORDER BY CreatedOn) AS ServiceProduct
-	   , FIRST_VALUE(ClientType) OVER (PARTITION BY ClientID, GrpClientType ORDER BY CreatedOn) AS ClientType
-	   , Bday
-	   , CreatedOn
-    FROM AttributeGroups
-
-)
-
-, ChangeTracking AS ( 
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientId 
-	   , ClientNumber
-	   , ServiceProduct
-	   , ClientType
-	   , Bday
-	   , CreatedOn
-       , HASHBYTES('SHA2_256', CONCAT(ServiceProduct, '|', ClientType)) AS RowHash 
-  
-    FROM ClientHistory 
-
-)
-
-, PriorRowHash AS (
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientId 
-	   , ClientNumber
-	   , ServiceProduct
-	   , ClientType
-	   , Bday
-	   , CreatedOn
-       , RowHash 
-	   , LAG (RowHash, 1, HASHBYTES('SHA2_256', '')) OVER (PARTITION BY ClientId ORDER BY CreatedOn) AS PriorRowHash
-    FROM ChangeTracking
-
-)
-
-, DistinctChanges AS ( 
-
-  SELECT HouseholdUID
-       , HouseholdId
-	   , ClientId 
-	   , ClientNumber
-	   , ISNULL(ServiceProduct, @UnknownTextValue) AS ServiceProduct
-	   , ISNULL(ClientType, @UnknownTextValue) AS ClientType
-	   , Bday
-       , RowHash 
-	   , CreatedOn AS EffectiveStartDate
-       , LEAD(CreatedOn, 1, @MaxDateValue) OVER(PARTITION BY ClientID ORDER BY CreatedOn) AS EffectiveEndDate
-       , CASE WHEN LEAD(CreatedOn, 1, @MaxDateValue) OVER(PARTITION BY ClientID ORDER BY CreatedOn) = @MaxDateValue THEN 1 ELSE 0 END AS CurrentRecord 
-    FROM PriorRowHash AS PRH
-   WHERE RowHash <> PriorRowHash
-
-)
-
-  INSERT 
-    INTO #ContactAttributes (
-         HouseholdUID
-       , HouseholdId
-	   , ClientID 
-	   , ClientNumber
-	   , ServiceProduct
-	   , ClientType
-	   , Bday
-	   , EffectiveStartDate
-       , EffectiveEndDate
-	   , C.CurrentRecord 
-  )
-
-
-  SELECT C.HouseholdUID
-       , C.HouseholdId
-	   , C.ClientID 
-	   , C.ClientNumber
-	   , C.ServiceProduct
-	   , C.ClientType
-	   , C.Bday
-	   , C.EffectiveStartDate
-       , C.EffectiveEndDate
-       , C.CurrentRecord 
-
-    FROM DistinctChanges AS C	
-
-
    INSERT
      INTO #DailyCallCycleAttributes (
 		  CalendarDate
 		, HouseholdUID
-		, HouseholdId 
 		, ClientID
 		, ClientNumber
-		, ClientPartitionKey
 		, ClientAge
 		, ServiceProduct
 		, ClientType
 		, WealthbuilderCallCycle
 		, WealthbuilderOver60CallCycle
 		, TradingClientCallCycle
-		, EffectiveStartDate
-		, EffectiveEndDate
-		, CurrentRecord		 
+		, HAUM_HLNW
    
    )
    
-   SELECT CalendarDate
-        , HouseholdUID	
-        , HouseholdId	
-        , ClientID	
-        , ClientNumber	
-		, ISNULL(CASE WHEN HouseholdUID <> '[Unknown]' THEN HouseholdUID ELSE NULL END, ClientID) AS ClientPartitionKey
-		, FLOOR(DATEDIFF(D, BDay, CalendarDate)/365.25) AS ClientAge        
-		, ServiceProduct	
-        , ClientType       
-		, CASE WHEN ServiceProduct = 'WealthBuilder' THEN 180 ELSE NULL END AS WealthBuilderCallCycle
-		, CASE WHEN ServiceProduct = 'WealthBuilder' AND FLOOR(DATEDIFF(D, BDay, CalendarDate)/365.25) >= 60 THEN 90 ELSE NULL END AS WealthBuilderOver60CallCycle
-		, CASE WHEN ClientType = 'Client - Trading' THEN 90 ELSE NULL END AS TradingClientCallCycle
-		, EffectiveStartDate
-		, EffectiveEndDate
-		, CurrentRecord		
-     FROM #ContactAttributes
-	CROSS JOIN FDW.DIMDATE
-	WHERE ClientType IN ('Deceased Client','Client - Trading','Client - Non Trading') --LIMIT TO ACTIVE CLIENTS ONLY 
-      AND CalendarDate >= EffectiveStartDate 
-	  AND CalendarDate < CASE WHEN EffectiveEndDate < @TODAY 
-							  THEN EffectiveEndDate
-                              ELSE @TODAY 
-                          END
+   SELECT STG.CalendarDate
+        , STG.HouseholdUID
+        , STG.ClientId
+        , STG.ClientNumber
+        , FLOOR(DATEDIFF(D, CONVERT(DATE, CB.fi_birthdate), CalendarDate)/365.25) AS ClientAge 
+        , DC.ServiceProduct
+        , DC.ClientType
+        , CASE WHEN DC.ServiceProduct = 'WealthBuilder' THEN 180 ELSE NULL END AS WealthBuilderCallCycle
+  	    , CASE WHEN DC.ServiceProduct = 'WealthBuilder' AND FLOOR(DATEDIFF(D, CONVERT(DATE, CB.fi_birthdate), CalendarDate)/365.25) >= 60 THEN 90 ELSE NULL END AS WealthBuilderOver60CallCycle
+  	    , CASE WHEN DC.ClientType = 'Client - Trading' THEN 90 ELSE NULL END AS TradingClientCallCycle
+		, CASE WHEN STG.ClientAssetsType = 'HAUM' THEN 60 WHEN STG.ClientAssetsType = 'HLNW' THEN 75 END AS HAUM_HLNW
+     FROM STG.DailyClientAssetsandTenureKeys AS STG
+     LEFT
+     JOIN FDW.DimClient AS DC
+       ON DC.ClientId = STG.ClientId
+      AND STG.CalendarDate >= DC.EffectiveStartDate
+      AND STG.CalendarDate < DC.EffectiveEndDate
+     LEFT
+     JOIN Iris.ContactBase AS CB
+       ON STG.ClientId = CB.ContactId 
 
 
 						  
@@ -394,10 +203,8 @@ WITH
 
 	SELECT CCA.CalendarDate	
 		 , CCA.HouseholdUID	
-		 , CCA.HouseholdId	
 		 , CCA.ClientID	
 		 , CCA.ClientNumber	
-		 , CCA.ClientPartitionKey	
 		 , CASE 
 				WHEN CCA.CalendarDate >= CONVERT(DATE, ST.StartDate) AND CCA.CalendarDate <= DATEADD(D, 90, CONVERT(DATE, ST.StartDate)) THEN 30
 				WHEN CCA.CalendarDate >= CONVERT(DATE, ST.StartDate) AND CCA.CalendarDate <= DATEADD(D, 180, CONVERT(DATE, ST.StartDate)) THEN 60
@@ -416,10 +223,8 @@ WITH
 
     SELECT CalendarDate	
 		 , HouseholdUID	
-		 , HouseholdId	
 		 , ClientID	
 		 , ClientNumber	
-		 , ClientPartitionKey		
 		 , PCCallCycle
 		 , ROW_NUMBER() OVER (PARTITION BY ClientID, CalendarDate ORDER BY PCCallCycle) AS RowNum
       FROM PCCallCycles 
@@ -430,10 +235,8 @@ WITH
 
     SELECT CalendarDate	
 		 , HouseholdUID	
-		 , HouseholdId	
 		 , ClientID	
 		 , ClientNumber	
-		 , ClientPartitionKey		
 		 , PCCallCycle
       FROM CallCycleRowNum
      WHERE RowNum = 1 --IF MULTIPLE CALL CYCLES ON THE SAME DAY PER CLIENT, USE LOWEST CALL CYCLE
@@ -450,21 +253,7 @@ WITH
 	  FROM PCCallCyclesFinal AS SRC
 	  JOIN #DailyCallCycleAttributes AS TGT
 	    ON SRC.CalendarDate = TGT.CalendarDate
-	   AND SRC.ClientPartitionKey = TGT.ClientPartitionKey 
-
-
-/*
-	UPDATE HAUM/HLNW CALL CYCLES AS DEFINED IN IC CALL CYCLES CONFLUENCE DOC WITHIN PCG BI COMMUNITY PAGE 
-*/
-	
-	UPDATE #DailyCallCycleAttributes
-	   SET HAUM_HLNW = CASE WHEN SRC.ClientAssetsType = 'HAUM' THEN 60 WHEN SRC.ClientAssetsType = 'HLNW' THEN 75 END 
-	  FROM REF.vwDailyClientAssets AS SRC
-	  JOIN #DailyCallCycleAttributes AS TGT
-	    ON SRC.ClientId = TGT.ClientId
-	   AND SRC.CalendarDate = TGT.CalendarDate 
-	 WHERE SRC.ClientAssetsType IN ('HAUM', 'HLNW')
-
+	   AND SRC.ClientID = TGT.ClientID 
 
 
 ;WITH CustomCallCycles AS ( 
@@ -488,10 +277,8 @@ WITH
 
 	SELECT CCA.CalendarDate	
 		 , CCA.HouseholdUID	
-		 , CCA.HouseholdId	
 		 , CCA.ClientID	
 		 , CCA.ClientNumber	
-		 , CCA.ClientPartitionKey	
 		 , CC.CallCycle
 		 , ROW_NUMBER() OVER (PARTITION BY CCA.ClientID, CCA.CalendarDate ORDER BY CC.CallCycle) AS RowNum
 	  FROM #DailyCallCycleAttributes AS CCA
@@ -507,10 +294,8 @@ WITH
 
     SELECT CalendarDate	
 		 , HouseholdUID	
-		 , HouseholdId	
 		 , ClientID	
 		 , ClientNumber	
-		 , ClientPartitionKey	
 		 , CallCycle
 	  FROM DupeProtect
 	 WHERE RowNum = 1 
@@ -526,7 +311,7 @@ WITH
 	  FROM CustomCallCycleFinal AS SRC
 	  JOIN #DailyCallCycleAttributes AS TGT
 	    ON SRC.CalendarDate = TGT.CalendarDate
-	   AND SRC.ClientPartitionKey = TGT.ClientPartitionKey 
+	   AND SRC.ClientID = TGT.ClientID 
 
 
 
@@ -583,10 +368,8 @@ WITH
 
 	SELECT CCA.CalendarDate	
 		 , CCA.HouseholdUID	
-		 , CCA.HouseholdId	
 		 , CCA.ClientID	
 		 , CCA.ClientNumber	
-		 , CCA.ClientPartitionKey	
 		 , 180 AS ExtendedCallCycle --180 IS THE EXTENDED CALL CYCLE TEST DURATION
 	  FROM #DailyCallCycleAttributes AS CCA
 	  JOIN ExtendedCallCycleWindows AS ECC
@@ -606,7 +389,7 @@ WITH
 	  FROM ExtendedCallCycleFinal AS SRC
 	  JOIN #DailyCallCycleAttributes AS TGT
 	    ON SRC.CalendarDate = TGT.CalendarDate
-	   AND SRC.ClientPartitionKey = TGT.ClientPartitionKey 
+	   AND SRC.ClientID = TGT.ClientID 
 
 
 /*
@@ -617,10 +400,8 @@ WITH
       INTO #DailyCallCycle (
 		   CalendarDate
 		 , HouseholdUID
-		 , HouseholdId
 		 , ClientID
 		 , ClientNumber	
-		 , ClientPartitionKey
 		 , WealthbuilderCallCycle
 		 , WealthbuilderOver60CallCycle
 		 , TradingClientCallCycle
@@ -634,10 +415,8 @@ WITH
  
     SELECT CalendarDate	
 		 , HouseholdUID	
-		 , HouseholdId	
 		 , ClientID	
 		 , ClientNumber	
-		 , ClientPartitionKey	
 		 , WealthbuilderCallCycle
 		 , WealthbuilderOver60CallCycle
 		 , TradingClientCallCycle
@@ -661,151 +440,159 @@ WITH
 
 
 -- Combining IRIS Activities with SFDC Interactions. Later used for Contact Rates and Bio/Network Review rates
-;WITH IrisActivitiesPivoted AS (
+ ;WITH PIVOTED as (
  
-	 SELECT  RM.fi_fi_relationshipmanagementauditlogId AS InteractionId
-		   , RM.fi_AssignedToUserId 
-		   , RM.CreatedBy
-		   , RM.CreatedOn
-		   , CONVERT(DATE, RM.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') CreatedOnPST 
-		   , fi_ContactId
-		   , Ap.ActivityID
-		   , 1 AS ActivityCount
+ SELECT  RM.fi_fi_relationshipmanagementauditlogId AS InteractionId
+	   , RM.fi_AssignedToUserId 
+	   , RM.CreatedBy
+	   , RM.CreatedOn
+	   , CONVERT(DATE, RM.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') CreatedOnPST 
+	   , fi_ContactId
+	   , Ap.ActivityID
+	   , 1 AS ActivityCount
        
-	  FROM Iris.fi_fi_relationshipmanagementauditlogBase RM
+  FROM Iris.fi_fi_relationshipmanagementauditlogBase RM
 
-	 OUTER 
-	 APPLY OPENJSON(CONCAT('[
-			  {"ActivityId":"', RM.[fi_ActivityTopic1], '","ActivityCounter":1},
-			  {"ActivityId":"', RM.[fi_ActivityTopic2], '","ActivityCounter":2},
-			  {"ActivityId":"', RM.[fi_ActivityTopic3], '","ActivityCounter":3},
-			  {"ActivityId":"', RM.[fi_ActivityTopic4], '","ActivityCounter":4},
-			  {"ActivityId":"', RM.[fi_ActivityTopic5], '","ActivityCounter":5}
-			  ]'),'$')
-	  WITH ( ActivityId NVARCHAR(36) '$.ActivityId' 
-		   , ActivityCounter TINYINT '$.ActivityCounter'
-		   ) Ap
- 
+  OUTER APPLY OPENJSON(CONCAT('[
+          {"ActivityId":"', RM.[fi_ActivityTopic1], '","ActivityCounter":1},
+          {"ActivityId":"', RM.[fi_ActivityTopic2], '","ActivityCounter":2},
+          {"ActivityId":"', RM.[fi_ActivityTopic3], '","ActivityCounter":3},
+          {"ActivityId":"', RM.[fi_ActivityTopic4], '","ActivityCounter":4},
+          {"ActivityId":"', RM.[fi_ActivityTopic5], '","ActivityCounter":5}
+          ]'),'$')
+  WITH ( ActivityId NVARCHAR(36) '$.ActivityId' 
+       , ActivityCounter TINYINT '$.ActivityCounter'
+       ) Ap
  )
 
-, IRISActivities AS (
-
-	  SELECT CONVERT(NVARCHAR(36),InteractionId) InteractionId
-		   , P.fi_AssignedToUserId 
-		   , P.CreatedBy
-		   , CASE WHEN UB1.domainname is null THEN  1 --Audit Log entry has an activedirectoryID that is not in WD, meaning that it is a service account. Primary IC gets credit
-				  WHEN p.CreatedBy = p.fi_AssignedtoUserID THEN  1 --Assigned IC did the activity
-				  ELSE 0
-			 END PrimaryICFlag 			
-		   , P.CreatedOn
-		   , P.fi_ContactId ClientID
-		   , TB.fi_ID ActivityID
-		   , CreatedOnPST 
-		   , SFM.SFValue       
-		FROM IrisActivitiesPivoted P
-
-		JOIN Iris.fi_topicBase TB 
-		  ON TB.fi_topicId = CASE WHEN P.ActivityID = '' THEN @UnknownGuid ELSE P.ActivityID END
-		
-		JOIN [Iris].[SystemUserBase] UB1 
-		  ON UB1.SystemUserId = P.createdby
-		
-		LEFT 
-		JOIN REF.PcgSfMapping SFM 
-		  ON TB.fi_ID = SFM.OldCode
-	   
-	   WHERE TB.fi_ID IN (102072, 102073, 102075, 102076, 112800,106707,106731) -- Activities from Iris
-
-		 
+, IRISActivities as (
+ SELECT 
+        CONVERT(NVARCHAR(36),InteractionId) InteractionId
+	   , P.fi_AssignedToUserId 
+	   , P.CreatedBy
+	   , CASE WHEN p.CreatedBy = p.fi_AssignedtoUserID THEN  1 --Assigned IC did the activity
+			  ELSE 0
+			  END PrimaryICFlag 
+			
+	   , P.CreatedOn
+	   , P.fi_ContactId ClientID
+	   , TB.fi_ID ActivityID
+	   , CreatedOnPST 
+	   ,SFM.SFValue
+       
+  FROM PIVOTED P
+	INNER JOIN Iris.fi_topicBase TB on TB.fi_topicId = CASE WHEN P.ActivityID = '' THEN @UnknownGuid ELSE P.ActivityID END
+	INNER JOIN [Iris].[SystemUserBase] UB1 ON UB1.SystemUserId = P.createdby
+	LEFT JOIN REF.PcgSfMapping SFM ON TB.fi_ID = SFM.OldCode
+  WHERE TB.fi_ID IN (102072, 102073, 102075, 102076, 112800,106707,106731) -- Activities from Iris
 )
-      INSERT 
-	    INTO #DailyActivities (
-			 InteractionId
-		   , ClientID      
-		   , CreatedOn      
-		   , ActivityID   
-		   , SFValue
-		   , PrimaryICFlag       
-	  )
 
+INSERT INTO #DailyActivities (
+         InteractionId
+	   , ClientID      
+	   , CreatedOn      
+	   , ActivityID   
+	   , SFValue
+	   , PrimaryICFlag
+)
+	SELECT 
+         InteractionId
+	   , ClientID
+	   , CreatedOnPST 
+	   , ActivityID
+	   , SFValue
+	   , PrimaryICFlag 	
+	FROM IrisActivities;
 
-	  SELECT InteractionId
-		   , ClientID
-		   , CreatedOnPST 
-		   , ActivityID
-		   , SFValue
-		   , PrimaryICFlag 	
-	    FROM IrisActivities 
-
-
-
-;WITH SFDCActivities AS (
-	
-	  SELECT I.Id AS InteractionId
-		   , CalendarDAte CreatedOnPST
-		   , DCH.ClientID
-		   , I.InteractionType
-		   , CASE 
-				WHEN U.EmployeeNumber = DE.EmployeeID THEN 1
+WITH SFDCActivities AS	(
+	SELECT I.Id AS InteractionId
+		, CalendarDAte CreatedOnPST
+		, DCH.ClientID
+		, I.InteractionType
+		, CASE 
+            WHEN try_cast(U.EmployeeNumber as int) = DE.EmployeeID THEN 1
 				ELSE 0
-			 END AS PrimaryICFlag
-      
-		FROM PcgSf.Interaction I
+			END AS PrimaryICFlag
+	
+	FROM PcgSf.Interaction I
+		JOIN FDW.DimDate DD  -- -- DimDateKey
+			ON CONVERT(DATE, I.CreatedDate AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') = DD.CalendarDate
+		LEFT JOIN FDW.DimClient DCH  -- DimClientHouseholdKey
+			ON I.AccountId = DCH.HouseholdUID
+			AND DD.CalendarDate >= DCH.EffectiveStartDate
+			AND DD.CalendarDate <  DCH.EffectiveEndDate
+		LEFT JOIN Pcgsf.InteractionAttendee IA
+			ON IA.InteractionId = I.Id
+		LEFT JOIN Pcgsf.[User] U 
+			ON U.Id = IA.UserId
+		LEFT JOIN REF.vwRelationshipManagementAssignmentWindow RMA
+			ON DCH.ClientNumber = RMA.ClientNumber
+			AND DD.CalendarDate >= RMA.AssignmentWindowStartDate
+			AND DD.CalendarDate < RMA.AssignmentWindowEndDate
+		LEFT JOIN FDW.DimEmployee DE --AssignedEmployee
+			ON RMA.AssignedToActiveDirectoryUserIdWithDomain = DE.ActiveDirectoryUserIdWithDomain
+			AND DD.CalendarDate >= DE.EffectiveStartDate
+			AND DD.CalendarDate < DE.EffectiveEndDate
+			AND DE.TerminationRecord = 'No'
 
-		-- -- DimDateKey
-		JOIN FDW.DimDate DD
-		  ON CONVERT(DATE, I.CreatedDate AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') = DD.CalendarDate
+	WHERE IA.AttendeeType = 'Internal'
+)
 
-		-- DimClientHouseholdKey
-		LEFT
-		JOIN FDW.DimClient DCH
-		  ON I.AccountId = DCH.HouseholdUID
-		 AND DD.CalendarDate >= DCH.EffectiveStartDate
-		 AND DD.CalendarDate <  DCH.EffectiveEndDate
+INSERT INTO #DailyActivities (
+       InteractionId
+	   , ClientID      
+	   , CreatedOn      
+	   , SFValue
+	   , PrimaryICFlag
+)
+	SELECT
+	  InteractionID	
+	, ClientID
+	, CreatedOnPST
+	, InteractionType	
+	, PrimaryICFlag
+	FROM SFDCActivities
 
-		LEFT
-		JOIN Pcgsf.InteractionAttendee IA
-		  ON IA.InteractionId = I.Id
 
-		LEFT
-		JOIN Pcgsf.[User] U 
-		  ON U.Id = IA.UserId
+;WITH SWSnapShots AS (
 
-		LEFT
-		JOIN REF.vwRelationshipManagementAssignmentWindow RMA
-		  ON DCH.ClientNumber = RMA.ClientNumber
-		 AND DD.CalendarDate >= RMA.AssignmentWindowStartDate
-		 AND DD.CalendarDate < RMA.AssignmentWindowEndDate
-
-		LEFT
-		JOIN FDW.DimEmployee DE --AssignedEmployee
-		  ON RMA.AssignedToActiveDirectoryUserIdWithDomain = DE.ActiveDirectoryUserIdWithDomain
-		 AND DD.CalendarDate >= DE.EffectiveStartDate
-		 AND DD.CalendarDate < DE.EffectiveEndDate
-		 AND DE.TerminationRecord = 'No'
-
-	   WHERE IA.AttendeeType = 'Internal'
+	SELECT
+		  CONVERT(DATE, ISNULL(R.dtSubmissionDate, T.dtSubmissionDate)) AS EffectiveStartDate
+		, T.iTicketId
+		, AL.iAccountHolderCID AS ClientNumber		
+	FROM [SWRptSTG].[csuSWAssetLiability_SNPST] AL 
+		JOIN [SWRptSTG].[csuSWTickets] T
+			ON AL.iSnapshotId = T.iIWSnapshotId
+		JOIN [SWRptSTG].[csuSWRecommendation] R
+			ON T.iTicketId = R.iTicketId 
+		JOIN [SWRptSTG].[csuSWSubmissionTypes] ST
+			ON R.iSubmissionTypeId = ST.iSubmissionTypesId
+   WHERE T.iStatusId = 306 --Completed
+	 AND ST.vchName Not In ('Custom (CUS) Account','Hypothetical Cash Flow Analysis Only')  --Exclude Hypothetical Recs	
 
 )
 
-
-
-      INSERT 
-	    INTO #DailyActivities (
-             InteractionId
-	       , ClientID      
-	       , CreatedOn      
-	       , SFValue
-	       , PrimaryICFlag       
-	  )
-
-
-	  SELECT InteractionID	
-	       , ClientID
-	       , CreatedOnPST
-	       , InteractionType	
-	       , PrimaryICFlag
-	    FROM SFDCActivities
+, LastSW as (
+	SELECT
+		SW1.CalendarDate
+	   , SW.ClientNumber
+	   , SW.iTicketId
+	   , SW.EffectiveStartDate as LastSWCompleteDate
+	FROM (
+		SELECT
+			max(SW.iTicketId) maxticketID
+			, SW.ClientNumber	
+			, DC.CalendarDate
+		FROM #DailyCallCycle DC
+			INNER JOIN SWSnapShots SW on SW.ClientNumber = DC.ClientNumber
+		WHERE  EffectiveStartDate <= DC.CalendarDate
+		GROUP BY 
+			SW.ClientNumber	
+			, DC.CalendarDate
+		) SW1
+		INNER JOIN SWSnapShots SW ON SW.iTicketId = SW1.maxticketID
+	        AND SW.ClientNumber = SW1.ClientNumber	--shouldn't need, but there is actually bad data in source. multiple cids to a ticketid
+)	
 
 
 
@@ -816,9 +603,8 @@ WITH
 		   , ClientId
 		   , ClientNumber
 		   , FinalCallCycle
-		   , DimCallCycleKey
-		   , CallCycleContact
-		   , ContactLag
+		   , DimContactFrequencyKey
+		   , ContactFrequencyViolation
 	  )
 
 
@@ -827,37 +613,37 @@ WITH
 		   , DC.ClientId
 		   , DC.ClientNumber
 		   , DC.FinalCallCycle
-		   , CC.DimCallCycleKey
-		   , MAX(CASE 
+		   , CC.DimContactFrequencyKey
+		   , MIN(CASE 
 					WHEN DA.SFValue in ('Inbound Phone Call','In-Person','Outbound Phone Call','Virtual')--Contacts
-					 AND PrimaryICFlag = 1
-					 AND DATEDIFF(DD, DA.CreatedOn, DC.CalendarDate) BETWEEN 0 AND DC.FinalCallCycle
-			        THEN 1 
-			        ELSE 0 
-			   END) CallCycleContact
-		   , DATEDIFF(DD, MAX(CASE 
-				WHEN DA.SFValue in ('Inbound Phone Call','In-Person','Outbound Phone Call','Virtual')--Contacts
-				 AND PrimaryICFlag = 1
-				 AND CONVERT(DATE, DA.CreatedOn) <= DC.CalendarDate
-			    THEN  DA.CreatedOn
-			 END), DC.CalendarDate) AS ContactLag 
+					--IF CONTACT WAS MADE WITHIN THE SPECIFIED CALL CYCLE OR IF A SW REVIEW WAS DONE WITHIN THE SPECIFIED CALL CYCLE THEN 0 ELSE 1
+					 AND (DATEDIFF(DD, DA.CreatedOn, DC.CalendarDate) BETWEEN 0 AND DC.FinalCallCycle
+					  OR DATEDIFF(DD, ISNULL(LSW.LastSWCompleteDate,@MinDateValue), DC.CalendarDate) BETWEEN 0 AND DC.FinalCallCycle)
+			        THEN 0 --NO VIOLATION
+			        ELSE 1 --VIOLATION
+			   END) ContactFrequencyViolation
+
 		FROM #DailyCallCycle DC
 		LEFT 
 		JOIN #DailyActivities DA 
 		  ON DC.ClientId = DA.ClientId
 		LEFT
-		JOIN FDW.DimCallCycle AS CC
-		  ON DC.FinalCallCycle = CC.CallCycle
+		JOIN FDW.DimContactFrequency AS CC
+		  ON DC.FinalCallCycle = CC.ContactFrequencyInDays
 		LEFT
 		JOIN FDW.DimDate AS DD
 		  ON DD.CalendarDate = DC.CalendarDate
+	    LEFT 
+	    JOIN LastSW AS LSW 
+	      ON LSW.CalendarDate = DC.CalendarDate
+	     AND LSW.ClientNumber = DC.ClientNumber
 	   GROUP 
 		  BY DD.DimDateKey
 		   , DC.CalendarDate
 		   , DC.ClientId
 		   , DC.ClientNumber
 		   , DC.FinalCallCycle
-		   , CC.DimCallCycleKey
+		   , CC.DimContactFrequencyKey
 
 
 /*
@@ -865,9 +651,9 @@ WITH
 */
 
 	UPDATE FDW.FactClientSnapshotDaily
-	   SET DimCallCycleKey = SRC.DimCallCycleKey
-	     , ContactLag = SRC.ContactLag
-		 , CallCycleContact = SRC.CallCycleContact
+	   SET DimContactFrequencyKey = SRC.DimContactFrequencyKey
+		 , ContactFrequencyViolation = SRC.ContactFrequencyViolation
+         , DWUpdatedDateTime = @DWUpdatedDateTime
 	  FROM #DailyCallCycleContact AS SRC
 	  JOIN FDW.FactClientSnapshotDaily AS TGT
 	    ON SRC.DimDateKey = TGT.DimDateKey
