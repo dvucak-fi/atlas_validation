@@ -1,9 +1,3 @@
-         --, LEAD(AssignmentStartDate, 1, @MaxDateValue) OVER (PARTITION BY ISNULL(ClientId, HouseholdUID) ORDER BY AssignmentStartDate) AS AssignmentEndDate 
-         --, CASE 
-         --       WHEN ROW_NUMBER() OVER (PARTITION BY ISNULL(ClientId, HouseholdUID), CONVERT(DATE, AssignmentStartDate) ORDER BY AssignmentStartDate DESC) = 1 
-         --       THEN 1 
-         --       ELSE 0 
-         --  END AS IsEndOfDayAssignment
 
 DECLARE @UnknownTextValue NVARCHAR(255) = '[Unknown]'
       , @MinDateValue DATE = '1900-01-01'
@@ -165,6 +159,10 @@ WITH
 
 ) 
 
+/*
+    IRIS ASSIGNMENT HISTORY - CAP HISTORY @ SFDC ACCOUNT CREATION DATE
+*/
+
 , RMAssignments AS (
 
     SELECT RM.fi_Id_Search AS RelationshipManagementAuditLogId	
@@ -253,6 +251,16 @@ WITH
      WHERE RowHash <> PreviousRowHash  --Limit to distinct changes only
      
 )
+
+/*
+    11/30/2023 - PER PRODUCT OWNER: SFDC DOES NOT HAVE PRE-ASSIGNMENT IDENTIFIER. WE NEED TO USE LOGIC TO DETERMINE 
+    IF CLIENT IS A PRE-ASSIGNMENT. WE LOOK FOR CLIENTS WITH AN OPEN SFDC ONBOARDING CASE PRIOR
+    TO THE CONTRACT DATE. 
+
+    WE ALSO DON'T HAVE THE ABILITY TO IDENTIFY ROUND TRIP CLIENTS WITHIN SFDC. THAT BEING SAID, 
+    WE CANNOT JUST LOOK FOR ONBOARDING CASES PRIOR TO A CONTRACT DATE AS WE HAVE TO LOOK AT A CLIENT'S LIFECYCLE
+    TO IDENTIFY ONBOARDING/CONTRACT DATES WITHIN THE LIFECYCLE.
+*/
 
 , ClientLifecycles AS ( 
 
@@ -457,7 +465,6 @@ WITH
          , AssignedToActiveDirectoryUserIdWithDomain
          , AssignmentStartDate
          , AssignmentOrder
-         , MAX(AssignmentOrder) OVER (PARTITION BY ClientId) AS MaxAssignmentOrderPerSystemOfRecord
          , SystemOfRecord
       FROM AssignmentHistoryIris
 
@@ -474,30 +481,51 @@ WITH
          , AssignedToActiveDirectoryUserIdWithDomain
          , AssignmentStartDate
          , AssignmentOrder
-         , MAX(AssignmentOrder) OVER (PARTITION BY HouseholdUID) AS MaxAssignmentOrderPerSystemOfRecord
          , SystemOfRecord
       FROM AssignmentHistorySFDC
 
 ) 
 
-, IrisSFDC_RowHash AS (
+, MaxIrisAssignmentOrder AS ( 
 
     SELECT HouseholdUID	
          , HouseholdId	
          , ClientId
          , ClientNumber
-         , AssignmentType
-         , SystemUserId_IRIS
-         , SystemUserId_SFDC
-         , AssignedToFullName
-         , AssignedToActiveDirectoryUserIdWithDomain
-         , AssignmentStartDate
-         , AssignmentOrder
-         , MaxAssignmentOrderPerSystemOfRecord
-         , SystemOfRecord
+         , MAX(AssignmentOrder) AS MaxIrisAssignmentOrder
+      FROM AssignmentHistoryIris
+     GROUP 
+        BY HouseholdUID	
+         , HouseholdId	
+         , ClientId
+         , ClientNumber
+
+) 
+
+, IrisSFDC_RowHash AS (
+
+    SELECT UH.HouseholdUID	
+         , UH.HouseholdId	
+         , UH.ClientId
+         , UH.ClientNumber
+         , UH.AssignmentType
+         , UH.SystemUserId_IRIS
+         , UH.SystemUserId_SFDC
+         , UH.AssignedToFullName
+         , UH.AssignedToActiveDirectoryUserIdWithDomain
+         , UH.AssignmentStartDate
+         , CASE 
+                WHEN UH.SystemOfRecord = 'Iris' THEN UH.AssignmentOrder 
+                WHEN UH.SystemOfRecord = 'SFDC' THEN AO.MaxIrisAssignmentOrder + UH.AssignmentOrder
+                ELSE NULL
+           END AS AssignmentOrder
+         , UH.SystemOfRecord
          --ADDING ROW HASH ONCE AGAIN AS LAST IRIS ASSIGNMENT CAN BE THE SAME AS FIRST SFDC ASSIGNMENT 
-         , HASHBYTES ('SHA2_256', CONCAT(AssignedToActiveDirectoryUserIdWithDomain, '|', AssignmentType)) AS RowHash
-      FROM UnionedHistory
+         , HASHBYTES ('SHA2_256', CONCAT(UH.AssignedToActiveDirectoryUserIdWithDomain, '|', UH.AssignmentType)) AS RowHash
+      FROM UnionedHistory AS UH
+      LEFT
+      JOIN MaxIrisAssignmentOrder AS AO
+        ON UH.ClientId = AO.ClientId
 
 ) 
 
@@ -514,13 +542,14 @@ WITH
          , AssignedToActiveDirectoryUserIdWithDomain
          , AssignmentStartDate
          , AssignmentOrder
-         , MaxAssignmentOrderPerSystemOfRecord
          , SystemOfRecord
          , RowHash
-         , LAG(RowHash, 1, HASHBYTES('SHA2_256', @UnknownTextValue)) OVER (PARTITION BY ISNULL(HouseholdUID, ClientId) ORDER BY AssignmentStartDate, AssignmentOrder) AS PrevRowHash
+         , LAG(RowHash, 1, HASHBYTES('SHA2_256', @UnknownTextValue)) OVER (PARTITION BY ISNULL(HouseholdUID, ClientId) ORDER BY AssignmentOrder) AS PrevRowHash
       FROM IrisSFDC_RowHash
 
 ) 
+
+, AssignmentHistoryIC AS ( 
 
     SELECT HouseholdUID	
          , HouseholdId	
@@ -531,37 +560,46 @@ WITH
          , SystemUserId_SFDC
          , AssignedToFullName
          , AssignedToActiveDirectoryUserIdWithDomain
-         , AssignmentStartDate         
-         , AssignmentOrder
-         , MaxAssignmentOrderPerSystemOfRecord
-         , CASE WHEN SystemOfRecord= 'Iris' THEN AssignmentOrder
-         --, LEAD(AssignmentStartDate, 1, @MaxDateValue) OVER (PARTITION BY ISNULL(HouseholdUID, ClientId) ORDER BY AssignmentStartDate) AS AssignmentEndDate 
-         --, CASE 
-         --       WHEN ROW_NUMBER() OVER (PARTITION BY ISNULL(HouseholdUID, ClientId), CONVERT(DATE, AssignmentStartDate) ORDER BY AssignmentStartDate DESC) = 1 
-         --       THEN 1 
-         --       ELSE 0 
-         --  END AS IsEndOfDayAssignment
+         , AssignmentStartDate              
+         , LEAD(AssignmentStartDate, 1, @MaxDateValue) OVER (PARTITION BY ISNULL(HouseholdUID, ClientId) ORDER BY AssignmentOrder) AS AssignmentEndDate 
+         , ROW_NUMBER() OVER (PARTITION BY ISNULL(HouseholdUID, ClientId) ORDER BY AssignmentOrder) AS AssignmentOrder --REORDER AS WE MAY HAVE DROPPED RECORDS IN THE WHERE CLAUSE
+         , CASE 
+                WHEN ROW_NUMBER() OVER (PARTITION BY ISNULL(HouseholdUID, ClientId), CONVERT(DATE, AssignmentStartDate) ORDER BY AssignmentOrder DESC) = 1 
+                THEN 1 
+                ELSE 0 
+           END AS IsEndOfDayAssignment
          , SystemOfRecord
      FROM Previous_IrisSFDC_RowHash
     WHERE RowHash <> PrevRowHash
-       and clientnumber = 3831461
-     order by AssignmentStartDate
+
+) 
+
+SELECT * 
+  FROM AssignmentHistoryIC
+  WHERE CLIENTNUMBER = 3831461
+  --WHERE HouseholdUID = '0018W00002KGEKkQAP'
+  ORDER BY AssignmentOrder
+
+--SELECT HouseholdUID
+--     , COUNT(DISTINCT SystemOfRecord) AS RECCOUNT
+--  FROM AssignmentHistoryIC
+--  GROUP BY HouseholdUID
+--  HAVING COUNT(DISTINCT SystemOfRecord) > 1 
 
 
-select * 
-from [REF].[RelationshipManagementAssignment]
-where clientnumber = 1501670
-order by assignmentstartdate
+--select * 
+--from [REF].[RelationshipManagementAssignment]
+--where clientnumber = 1501670
+--order by assignmentstartdate
 
 
-select * 
-  from [REF].[vwRelationshipManagementAssignmentWindow]
-  where clientnumber = 1501670
+--select * 
+--  from [REF].[vwRelationshipManagementAssignmentWindow]
+--  where clientnumber = 1501670
 
 
-select FullName
-     , fi_ID
-     , *
-  from iris.systemuserbase
-  where fi_id = 'dvucak'
-
+--select FullName
+--     , fi_ID
+--     , *
+--  from iris.systemuserbase
+--  where fi_id = 'dvucak'
