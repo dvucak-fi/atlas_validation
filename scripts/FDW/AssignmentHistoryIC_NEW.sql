@@ -1,4 +1,3 @@
-
 IF OBJECT_ID ('TEMPDB..#AssignmentHistoryIC') IS NOT NULL
     DROP TABLE #AssignmentHistoryIC
 
@@ -171,7 +170,6 @@ WITH
             , LEAD (TerminationDate, 1, @MaxDateValue) OVER (PARTITION BY ClientId ORDER BY TerminationDate) AS TermWindowEndDate           
          FROM TermedClients
         WHERE RowNum = 1 
-
 
 
 
@@ -363,11 +361,10 @@ WITH
          , PRH.AssignmentType  
 		 , PRH.AssignedToSystemUserId AS SystemUserId_IRIS
          , UM.SystemUserId_SFDC
-         --, CONVERT(NVARCHAR(36), PRH.AssignedToSystemUserId) AS AssignedToSystemUserId
          , SUB.FullName AS AssignedToFullName
          , SUB.DomainName AS AssignedToActiveDirectoryUserIdWithDomain      
 		 , PRH.CreatedOn AS AssignmentStartDate
-         , ROW_NUMBER() OVER (PARTITION BY PRH.ClientId ORDER BY PRH.CreatedOn, PRH.RelationshipManagementAuditLogId DESC) AS AssignmentOrder
+         , ROW_NUMBER() OVER (PARTITION BY PRH.ClientId ORDER BY PRH.CreatedOn, PRH.RelationshipManagementAuditLogId) AS AssignmentOrder
          , 'Iris' AS SystemOfRecord
 	  FROM PreviousRowHash PRH
       LEFT
@@ -498,7 +495,7 @@ WITH
          , FAH.ClientId
          , FAH.ClientNumber
 		 , CASE 
-			  WHEN OC.OnboardingDate < CD.ContractDate --PER SCOTT CROCKER & RACHEL STAKEY. PRE-ASSIGNMENT FLAG DOES NOT EXIST IN SFDC - USE THIS FOR NOW.
+			  WHEN CONVERT(DATE, OC.OnboardingDate) <= CONVERT(DATE, CD.ContractDate) --PER SCOTT CROCKER & RACHEL STEAKLEY. PRE-ASSIGNMENT FLAG DOES NOT EXIST IN SFDC - USE THIS FOR NOW.
 			  THEN 'Prospect Assignment' 
 			  ELSE 'Client Assignment'
 		   END AS AssignmentType
@@ -865,7 +862,7 @@ CREATE TABLE #vwEODAssignmentHistoryIC (
          , AssignedToFullName	
          , AssignedToActiveDirectoryUserIdWithDomain	
 	     , CONVERT(DATETIME, DATEDIFF(DAY, 0, AssignmentStartDate)) AS AssignmentWindowStartDate        
-         , CONVERT(DATETIME, DATEDIFF(DAY, 0, LEAD(AssignmentStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentOrder))) AS AssignmentWindowEndDate
+         , CONVERT(DATETIME, DATEDIFF(DAY, 0, LEAD(AssignmentStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentStartDate, AssignmentOrder))) AS AssignmentWindowEndDate
 	     , CASE 
 			  WHEN LEAD(AssignmentStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentOrder) = '9999-12-31'
 			  THEN 1 
@@ -873,6 +870,16 @@ CREATE TABLE #vwEODAssignmentHistoryIC (
 		   END AS CurrentRecord
       FROM PreviousAssignments
      WHERE RowHash <> PreviousRowHash  --Limit to distinct changes only
+
+
+select *
+  from #AssignmentHistoryIC
+ where clientnumber = 1501670
+ order by assignmentorder
+
+select *
+  from #vwEODAssignmentHistoryIC
+  where clientnumber = 1501670
 
 
 /*
