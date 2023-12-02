@@ -1,4 +1,34 @@
 
+IF OBJECT_ID ('TEMPDB..#AssignmentHistoryIC') IS NOT NULL
+    DROP TABLE #AssignmentHistoryIC
+
+CREATE TABLE #AssignmentHistoryIC (
+	[HouseholdUID] [nvarchar](4000) NULL,
+	[HouseholdID] [nvarchar](4000) NULL,
+	[ClientId] [uniqueidentifier] NULL,
+	[ClientNumber] [int] NULL,
+	[AssignmentType] [nvarchar](255) NULL,
+	[SystemUserId_IRIS] [uniqueidentifier] NULL,
+	[SystemUserId_SFDC] [nvarchar](18)  NULL,	
+	[AssignedToFullName] [nvarchar](255) NULL,
+	[AssignedToActiveDirectoryUserIdWithDomain] [nvarchar](255) NULL,
+	[AssignmentStartDate] [datetime] NULL,
+	[AssignmentEndDate] [datetime] NULL,
+	[AssignmentOrder] [int] NULL,
+	[IsEndOfDayAssignment] [int] NULL,
+	[SystemOfRecord] [nvarchar](25) NULL,
+	[DWCreatedDateTime] [datetime] NULL,
+	[DWUpdatedDateTime] [datetime] NULL,
+	[ETLJobProcessRunId] [uniqueidentifier] NULL,
+	[ETLJobSystemRunId] [uniqueidentifier] NULL
+)
+WITH
+(
+	DISTRIBUTION = HASH(ClientId),
+	HEAP
+)
+GO
+
 DECLARE @UnknownTextValue NVARCHAR(255) = '[Unknown]'
       , @MinDateValue DATE = '1900-01-01'
       , @MaxDateValue DATE = '9999-12-31'     
@@ -142,7 +172,8 @@ WITH
          FROM TermedClients
         WHERE RowNum = 1 
 
- 
+
+
 
 ;WITH SDFC_MigrationDates AS ( 
 
@@ -156,6 +187,98 @@ WITH
       JOIN REF.CRMClientMapping AS CRM
         ON AH.AccountId = CRM.HouseholdUID 
      WHERE AH.Field = 'created'
+
+) 
+
+, UserMapping AS ( 
+
+    SELECT WD.EmployeeId
+         , WD.PreferredFullName AS EmployeeName
+         , SUB.SystemUserId AS SystemUserId_IRIS
+         , SUB.IsDisabled 
+         , U.Id AS SystemUserId_SFDC
+         , U.IsActive
+      FROM WD.WDWorkers AS WD
+      LEFT
+      JOIN Iris.SystemUserBase AS SUB
+        ON WD.NetworkUser = SUB.DomainName
+      LEFT
+      JOIN PCGSF.[User] AS U
+        ON TRY_CAST(U.EmployeeNumber AS INT) = WD.EmployeeId 
+     WHERE SUB.SystemUserId IS NOT NULL --USER MUST EXIST IN IRIS SYSTEM USER BASE TABLE
+       AND U.Id IS NOT NULL --USER MUST ALSO EXIST IN SFDC USER TABLE
+
+) 
+
+, DupeIrisUsers AS ( 
+
+    SELECT SystemUserId_IRIS
+      FROM UserMapping
+     GROUP 
+        BY SystemUserId_IRIS
+    HAVING COUNT(1) > 1 
+
+) 
+
+, DupeSFDCUsers AS ( 
+
+    SELECT SystemUserId_SFDC
+      FROM UserMapping
+     GROUP 
+        BY SystemUserId_SFDC
+    HAVING COUNT(1) > 1 
+
+) 
+
+, HandleIrisDupes AS ( 
+
+    SELECT UM.EmployeeId	
+         , UM.EmployeeName	
+         , UM.SystemUserId_IRIS	
+         , UM.IsDisabled
+         , UM.SystemUserId_SFDC	
+         , UM.IsActive
+      FROM UserMapping AS UM
+      JOIN DupeIrisUsers AS DIU
+        ON UM.SystemUserId_IRIS = DIU.SystemUserId_IRIS
+     WHERE UM.IsActive = 1
+ 
+     UNION
+
+    SELECT UM.EmployeeId	
+         , UM.EmployeeName	
+         , UM.SystemUserId_IRIS	
+         , UM.IsDisabled    
+         , UM.SystemUserId_SFDC	
+         , UM.IsActive
+      FROM UserMapping AS UM
+     WHERE NOT EXISTS (SELECT 1 FROM DupeIrisUsers AS DIU WHERE UM.SystemUserId_IRIS = DIU.SystemUserId_IRIS)
+
+ ) 
+
+, UserMappingFinal AS ( 
+
+    SELECT HID.EmployeeId	
+         , HID.EmployeeName	
+         , HID.SystemUserId_IRIS	
+         , HID.IsDisabled
+         , HID.SystemUserId_SFDC	
+         , HID.IsActive
+      FROM HandleIrisDupes AS HID
+      JOIN DupeSFDCUsers AS DSU
+        ON HID.SystemUserId_SFDC = DSU.SystemUserId_SFDC
+     WHERE HID.IsDisabled = 0 --NOT DISABLED 
+ 
+     UNION 
+
+    SELECT HID.EmployeeId	
+         , HID.EmployeeName	
+         , HID.SystemUserId_IRIS	
+         , HID.IsDisabled    
+         , HID.SystemUserId_SFDC	
+         , HID.IsActive
+      FROM HandleIrisDupes AS HID
+     WHERE NOT EXISTS (SELECT 1 FROM DupeSFDCUsers AS DSU WHERE HID.SystemUserId_SFDC = DSU.SystemUserId_SFDC)
 
 ) 
 
@@ -238,7 +361,9 @@ WITH
          , PRH.ClientId
          , PRH.ClientNumber
          , PRH.AssignmentType  
-		 , CONVERT(NVARCHAR(36), PRH.AssignedToSystemUserId) AS AssignedToSystemUserId
+		 , PRH.AssignedToSystemUserId AS SystemUserId_IRIS
+         , UM.SystemUserId_SFDC
+         --, CONVERT(NVARCHAR(36), PRH.AssignedToSystemUserId) AS AssignedToSystemUserId
          , SUB.FullName AS AssignedToFullName
          , SUB.DomainName AS AssignedToActiveDirectoryUserIdWithDomain      
 		 , PRH.CreatedOn AS AssignmentStartDate
@@ -248,6 +373,9 @@ WITH
       LEFT
       JOIN Iris.SystemUserBase AS SUB
         ON PRH.AssignedToSystemUserId = SUB.SystemUserId
+      LEFT
+      JOIN UserMappingFinal AS UM
+        ON SUB.SystemUserId = UM.SystemUserId_IRIS
      WHERE RowHash <> PreviousRowHash  --Limit to distinct changes only
      
 )
@@ -321,12 +449,16 @@ WITH
          , AH.OldValue AS OldUserId
          , AH.NewValue AS NewUserId
          , AH.CreatedDate
-         , ROW_NUMBER() OVER (PARTITION BY AH.AccountId ORDER BY AH.CreatedDate, AH.Id COLLATE Latin1_General_100_BIN2_UTF8) AS AssignmentOrder
+         , ROW_NUMBER() OVER (PARTITION BY AH.AccountId ORDER BY AH.CreatedDate, AH.Id COLLATE Latin1_General_100_BIN2_UTF8) AS RowNum
       FROM PCGSF.AccountHistory AS AH
       JOIN REF.CRMClientMapping AS CRM
-        ON AH.AccountId = CRM.HouseholdUID
+        ON AH.AccountId = CRM.HouseholdUID      
+      JOIN SDFC_MigrationDates AS SFDC
+        ON AH.AccountId = SFDC.HouseholdUID
      WHERE Field = 'Investment_Counselor__c'
        AND DataType = 'EntityId'
+	   AND AH.CreatedDate >= SFDC_StartDate --EVENT HISTORY MUST BE AFTER ACCOUNT CREATION DATE 
+       AND AH.CreatedDate < @TODAY  --AVOID PULLING A SUBSET OF DAILY CHANGES FROM TODAY SO LIMIT TO PRIOR DAY CHANGES TO PULL IN COMPLETE LIST      
 
 )
 
@@ -339,12 +471,11 @@ WITH
          , AH.ClientNumber
          , AH.OldUserId
          , ISNULL(SFDC.SFDC_StartDate, AH.CreatedDate) AS CreatedDate
-         , AH.AssignmentOrder
       FROM SFDC_AuditHistory AS AH
       LEFT
       JOIN SDFC_MigrationDates AS SFDC
         ON AH.HouseholdUID = SFDC.HouseholdUID
-     WHERE AH.AssignmentOrder = 1
+     WHERE AH.RowNum = 1
 
      UNION 
 
@@ -355,7 +486,6 @@ WITH
          , ClientNumber
          , NewUserId
          , CreatedDate
-         , AssignmentOrder
       FROM SFDC_AuditHistory
  
  )
@@ -373,8 +503,8 @@ WITH
 			  ELSE 'Client Assignment'
 		   END AS AssignmentType
          , OldUserId AS AssignedToUserId
-         , CreatedDate         
-         , AssignmentOrder
+		 , CONVERT(DATETIME, CreatedDate AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') AS CreatedDate                 
+         , ROW_NUMBER() OVER (PARTITION BY FAH.HouseholdUID ORDER BY FAH.CreatedDate, FAH.AuditLogId COLLATE Latin1_General_100_BIN2_UTF8) AS AssignmentOrder
       FROM FullAuditHistory AS FAH
       LEFT
       JOIN ClientLifecycles AS CL
@@ -391,7 +521,7 @@ WITH
         ON CL.HouseholdUID = CD.HouseholdUID
        AND CL.TermWindowStartDate <= CD.ContractDate
        AND CL.TermWindowStartDate > CD.ContractDate
-     WHERE OldUserId IS NOT NULL
+     WHERE OldUserId IS NOT NULL --IGNORE RECORDS WHERE NO USER WAS ASSIGNED 
 
 )
 
@@ -436,6 +566,7 @@ WITH
          , PRH.ClientNumber
          , PRH.AssignmentType
          , PRH.AssignedToUserId	AS SystemUserId_SFDC
+         , UM.SystemUserId_IRIS
          , U.[name] AS AssignedToFullName
          , WD.NetworkUser AS AssignedToActiveDirectoryUserIdWithDomain
          , PRH.CreatedDate AS AssignmentStartDate
@@ -445,6 +576,9 @@ WITH
       LEFT
       JOIN PCGSF.[User] AS U 
         ON PRH.AssignedToUserId	= U.Id
+      LEFT
+      JOIN UserMappingFinal AS UM
+        ON U.Id = UM.SystemUserId_SFDC
       LEFT
       JOIN WD.WDWorkers AS WD
         ON TRY_CAST(U.EmployeeNumber AS INT) = WD.EmployeeId 
@@ -459,8 +593,8 @@ WITH
          , ClientId
          , ClientNumber
          , AssignmentType
-         , AssignedToSystemUserId AS SystemUserId_IRIS
-         , NULL AS SystemUserId_SFDC
+         , SystemUserId_IRIS
+         , SystemUserId_SFDC
          , AssignedToFullName
          , AssignedToActiveDirectoryUserIdWithDomain
          , AssignmentStartDate
@@ -475,7 +609,7 @@ WITH
          , ClientId
          , ClientNumber
          , AssignmentType
-         , NULL AS SystemUserId_IRIS
+         , SystemUserId_IRIS
          , SystemUserId_SFDC
          , AssignedToFullName
          , AssignedToActiveDirectoryUserIdWithDomain
@@ -516,7 +650,9 @@ WITH
          , UH.AssignmentStartDate
          , CASE 
                 WHEN UH.SystemOfRecord = 'Iris' THEN UH.AssignmentOrder 
-                WHEN UH.SystemOfRecord = 'SFDC' THEN AO.MaxIrisAssignmentOrder + UH.AssignmentOrder
+                --IF IRIS HISTORY EXISTS, TAKE MAX IRIS ASSIGNMENT ORDER + SFDC ASSIGNMENT ORDER
+                --IF NO IRIS RECORDS EXIST, 0 + SFDC ASSIGNMENT ORDER 
+                WHEN UH.SystemOfRecord = 'SFDC' THEN ISNULL(AO.MaxIrisAssignmentOrder, 0) + UH.AssignmentOrder
                 ELSE NULL
            END AS AssignmentOrder
          , UH.SystemOfRecord
@@ -574,32 +710,207 @@ WITH
 
 ) 
 
-SELECT * 
-  FROM AssignmentHistoryIC
-  WHERE CLIENTNUMBER = 3831461
-  --WHERE HouseholdUID = '0018W00002KGEKkQAP'
-  ORDER BY AssignmentOrder
 
---SELECT HouseholdUID
---     , COUNT(DISTINCT SystemOfRecord) AS RECCOUNT
---  FROM AssignmentHistoryIC
---  GROUP BY HouseholdUID
---  HAVING COUNT(DISTINCT SystemOfRecord) > 1 
+   INSERT 
+	 INTO #AssignmentHistoryIC (  
+		  HouseholdUID
+ 		, HouseholdID
+		, ClientId
+		, ClientNumber
+		, AssignmentType 
+		, SystemUserId_IRIS 
+		, SystemUserId_SFDC 	
+		, AssignedToFullName 
+		, AssignedToActiveDirectoryUserIdWithDomain 
+		, AssignmentStartDate
+		, AssignmentEndDate 
+		, AssignmentOrder 
+		, IsEndOfDayAssignment 
+		, SystemOfRecord 
+		--, DWCreatedDateTime 
+		--, DWUpdatedDateTime
+		--, ETLJobProcessRunId 
+		--, ETLJobSystemRunId 
+	 )
+
+   SELECT HouseholdUID	
+ 		, HouseholdID
+		, ClientId
+		, ClientNumber
+		, AssignmentType 
+		, SystemUserId_IRIS 
+		, SystemUserId_SFDC 	
+		, AssignedToFullName 
+		, AssignedToActiveDirectoryUserIdWithDomain 
+		, AssignmentStartDate
+		, AssignmentEndDate 
+		, AssignmentOrder 
+		, IsEndOfDayAssignment 
+		, SystemOfRecord 
+	    --, @DWUpdatedDateTime AS DWCreatedDateTime
+	    --, @DWUpdatedDateTime AS DWUpdatedDateTime
+	    --, @ETLJobProcessRunId AS ETLJobProcessRunId
+	    --, @ETLJobSystemRunId AS ETLJobSystemRunId  
+     FROM AssignmentHistoryIC
 
 
---select * 
---from [REF].[RelationshipManagementAssignment]
---where clientnumber = 1501670
---order by assignmentstartdate
+
+/*
+    EOD TEMP VIEW LOGIC
+*/
+
+IF OBJECT_ID('TEMPDB..#vwEODAssignmentHistoryIC') IS NOT NULL
+    DROP TABLE #vwEODAssignmentHistoryIC
+
+CREATE TABLE #vwEODAssignmentHistoryIC (
+	[HouseholdUID] [nvarchar](4000) NULL,
+	[HouseholdID] [nvarchar](4000) NULL,
+	[ClientId] [uniqueidentifier] NULL,
+	[ClientNumber] [int] NULL,
+	[AssignmentType] [nvarchar](255) NULL,
+	[SystemUserId_IRIS] [uniqueidentifier] NULL,
+	[SystemUserId_SFDC] [nvarchar](18)  NULL,	
+	[AssignedToFullName] [nvarchar](255) NULL,
+	[AssignedToActiveDirectoryUserIdWithDomain] [nvarchar](255) NULL,
+	[AssignmentWindowStartDate] [datetime] NULL,
+	[AssignmentWindowEndDate] [datetime] NULL,
+    [CurrentRecord] [int]
+)
 
 
---select * 
---  from [REF].[vwRelationshipManagementAssignmentWindow]
---  where clientnumber = 1501670
+
+;WITH DailyChanges AS ( 
+
+    SELECT HouseholdUID	
+         , HouseholdID	
+         , ClientId	
+         , ClientNumber	
+         , AssignmentType	
+         , SystemUserId_IRIS	
+         , SystemUserId_SFDC	
+         , AssignedToFullName	
+         , AssignedToActiveDirectoryUserIdWithDomain	
+         , AssignmentStartDate	
+         , AssignmentEndDate	
+         , AssignmentOrder	
+         , SystemOfRecord	
+	  FROM #AssignmentHistoryIC WITH (NOLOCK)
+	 WHERE IsEndOfDayAssignment = 1  --IF CLIENT WAS ASSIGNED TO NUMEROUS ICS WITHIN THE DAY, ONLY TAKE THE LAST CHANGE
+) 
+
+, RowHash AS ( 
+
+    SELECT HouseholdUID	
+         , HouseholdID	
+         , ClientId	
+         , ClientNumber	
+         , AssignmentType	
+         , SystemUserId_IRIS	
+         , SystemUserId_SFDC	
+         , AssignedToFullName	
+         , AssignedToActiveDirectoryUserIdWithDomain	
+         , AssignmentStartDate	
+         , AssignmentEndDate	
+         , AssignmentOrder	
+         , SystemOfRecord	
+		 , HASHBYTES ('SHA2_256', CONCAT(AssignedToActiveDirectoryUserIdWithDomain, '|', AssignmentType)) AS RowHash
+	  FROM DailyChanges
+
+) 
+
+, PreviousAssignments  AS (
+
+    SELECT HouseholdUID	
+         , HouseholdID	
+         , ClientId	
+         , ClientNumber	
+         , AssignmentType	
+         , SystemUserId_IRIS	
+         , SystemUserId_SFDC	
+         , AssignedToFullName	
+         , AssignedToActiveDirectoryUserIdWithDomain	
+         , AssignmentStartDate	
+         , AssignmentEndDate	
+         , AssignmentOrder	
+         , SystemOfRecord	
+		 , RowHash
+		 , LAG(RowHash, 1, HASHBYTES('SHA2_256', 'Unknown')) OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentOrder) AS PreviousRowHash
+	  FROM RowHash 
+
+)
+
+    INSERT 
+      INTO #vwEODAssignmentHistoryIC (
+           HouseholdUID	
+         , HouseholdID	
+         , ClientId	
+         , ClientNumber	
+         , AssignmentType	
+         , SystemUserId_IRIS	
+         , SystemUserId_SFDC	
+         , AssignedToFullName	
+         , AssignedToActiveDirectoryUserIdWithDomain	
+         , AssignmentWindowStartDate	
+	     , AssignmentWindowEndDate
+	     , CurrentRecord
+) 
+
+    SELECT HouseholdUID	
+         , HouseholdID	
+         , ClientId	
+         , ClientNumber	
+         , AssignmentType	
+         , SystemUserId_IRIS	
+         , SystemUserId_SFDC	
+         , AssignedToFullName	
+         , AssignedToActiveDirectoryUserIdWithDomain	
+	     , CONVERT(DATETIME, DATEDIFF(DAY, 0, AssignmentStartDate)) AS AssignmentWindowStartDate        
+         , CONVERT(DATETIME, DATEDIFF(DAY, 0, LEAD(AssignmentStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentOrder))) AS AssignmentWindowEndDate
+	     , CASE 
+			  WHEN LEAD(AssignmentStartDate, 1, '9999-12-31') OVER (PARTITION BY ISNULL(CONVERT(NVARCHAR(50), ClientId), HouseholdUID) ORDER BY AssignmentOrder) = '9999-12-31'
+			  THEN 1 
+			  ELSE 0 
+		   END AS CurrentRecord
+      FROM PreviousAssignments
+     WHERE RowHash <> PreviousRowHash  --Limit to distinct changes only
 
 
---select FullName
---     , fi_ID
---     , *
---  from iris.systemuserbase
---  where fi_id = 'dvucak'
+/*
+    TESTING
+*/
+
+   --duplicate record check
+   select isnull(HouseholdUID, clientid) 
+        , count(*)
+     from #vwEODAssignmentHistoryIC
+    where CurrentRecord = 1 
+    group 
+       by isnull(HouseholdUID, clientid) 
+   having count(*) > 1
+
+   --duplicate assignment start date check
+   select isnull(HouseholdUID, clientid) 
+        , AssignmentWindowStartDate
+        , count(*)
+     from #vwEODAssignmentHistoryIC
+    --where CurrentRecord = 1 
+    group 
+       by isnull(HouseholdUID, clientid) 
+        , AssignmentWindowStartDate
+   having count(*) > 1
+
+   --check for overlapping start/end dates
+   select * 
+     from ( 
+            select 
+                   isnull(HouseholdUID, clientid) AS PartitionKey
+                 , AssignmentWindowEndDate
+                 , LEAD (AssignmentWindowStartDate, 1, '9999-12-31') OVER (PARTITION BY isnull(HouseholdUID, clientid) ORDER BY AssignmentWindowStartDate) AS NextStartDate
+                 , CASE 
+                    WHEN AssignmentWindowEndDate = LEAD (AssignmentWindowStartDate, 1, '9999-12-31') OVER (PARTITION BY isnull(HouseholdUID, clientid) ORDER BY AssignmentWindowStartDate)
+                    THEN 1 
+                    ELSE 0 
+                   END EndDateMatchesNextStartDate
+              from #vwEODAssignmentHistoryIC
+          ) as a 
+    where a.EndDateMatchesNextStartDate = 0 
