@@ -1,38 +1,33 @@
-TRUNCATE TABLE #DimContact
 
---10796856
---10796856
+--run proc numerous times to ensure we're not inserting dupes
+	--Run1: 10796856
+	--Run2: 10796856
+	--Run3: 10796856
 SELECT COUNT(1)
   FROM #DimContact
 
 
-select DWCreatedDateTime
-    , count(1)
-from #DimContact
-group by DWCreatedDateTime
-
-
-select * 
-  from #DimContact 
-  where ContactFullName = 'Christine Neill'
-
-
-select *
-  from #DimContact
-  where contactnumber is null
-
-
+--Check for Iris and SFDC recs
 select SystemOfRecord
     , count(1)
 from #DimContact
 group by SystemOfRecord
 
+--Check for dupe HH	
 select HouseholdUID
     , count(1)
 from #DimContact
+where HouseholdUID <> '[Unknown]'
 group by HouseholdUID
 having count(1) > 1
 
+--check for dupe client numbers	
+select ContactNumber
+    , count(1)
+from #DimContact
+where ContactNumber <> -1
+group by ContactNumber
+having count(1) > 1
 
 
 --CREATE TABLE #DimContact (
