@@ -1,31 +1,23 @@
---TRUNCATE TABLE #HistoricalAccountAttributes
---CREATE TABLE #HistoricalAccountAttributes (
---	[FinAccountNumber] [nvarchar](25) NULL,
---	[HouseholdUID] [NVARCHAR](4000) NULL,
---	[HouseholdId] [NVARCHAR](4000) NULL,
---	[ClientId] [uniqueidentifier] NULL,
---	[ClientNumber] [int] NULL,
---	[RowHash] [varbinary](8000) NULL,
---	[EffectiveStartDate] [datetime] NULL,
---	[EffectiveEndDate] [datetime] NULL,
---	[CurrentRecord] [bit] NULL,
---	[DWCreatedDateTime] [datetime] NULL,
---	[DWUpdatedDateTime] [datetime] NULL,
---	[ETLJobProcessRunId] [uniqueidentifier] NULL,
---	[ETLJobSystemRunId] [uniqueidentifier] NULL
---)
---WITH
---(
---	DISTRIBUTION = HASH ( [FinAccountNumber] ),
---	CLUSTERED COLUMNSTORE INDEX
---)
---GO
 
-DECLARE @ETLJobProcessRunId UNIQUEIDENTIFIER = NEWID()
-DECLARE @ETLJobSystemRunId UNIQUEIDENTIFIER = NEWID()
+CREATE TABLE #HistoricalAccountAttributes (
+	[FinAccountNumber] [nvarchar](25) NULL,
+	[AccountNumber] [nvarchar](255) NULL,
+	[HouseholdUID] [NVARCHAR](4000) NULL,
+	[HouseholdId] [NVARCHAR](4000) NULL,
+	[ClientId] [uniqueidentifier] NULL,
+	[ClientNumber] [int] NULL,
+	[RowHash] [varbinary](8000) NULL,
+	[EffectiveStartDate] [datetime] NULL,
+	[EffectiveEndDate] [datetime] NULL,
+	[CurrentRecord] [bit] NULL,
+	[DWCreatedDateTime] [datetime] NULL,
+	[DWUpdatedDateTime] [datetime] NULL,
+	[ETLJobProcessRunId] [uniqueidentifier] NULL,
+	[ETLJobSystemRunId] [uniqueidentifier] NULL
+)
 
 
---CREATE PROC [REF].[spUpsertHistoricalAccountAttributes] @ETLJobSystemRunId [UNIQUEIDENTIFIER],@ETLJobProcessRunId [UNIQUEIDENTIFIER],@ComponentName [NVARCHAR](255) AS
+--alter PROC [REF].[spUpsertHistoricalAccountAttributes] @ETLJobSystemRunId [UNIQUEIDENTIFIER],@ETLJobProcessRunId [UNIQUEIDENTIFIER],@ComponentName [NVARCHAR](255) AS
 --BEGIN
 	-- SET NOCOUNT ON added to prevent extra result sets from
 	-- interfering with SELECT statements.	
@@ -116,6 +108,7 @@ IF OBJECT_ID ('TEMPDB..#AccountHistory_Temp') IS NOT NULL DROP TABLE #AccountHis
 
 CREATE TABLE #AccountHistory_Temp (
 	  FinAccountNumber NVARCHAR(100)
+	, AccountNumber NVARCHAR(100)
 	, HouseholdUID NVARCHAR(4000)
 	, HouseholdId NVARCHAR(4000)
 	, ClientId UNIQUEIDENTIFIER
@@ -127,7 +120,7 @@ WITH (DISTRIBUTION = HASH(FinAccountNumber), HEAP)
 
 
 --BEGIN BACKFILL RECS IF NO RECORDS EXIST IN REFERENCE TABLE
-IF NOT EXISTS (SELECT 1 FROM #HistoricalAccountAttributes) 
+IF NOT EXISTS (SELECT TOP 1 * FROM #HistoricalAccountAttributes) 
 BEGIN 
 
 	--BEGIN TRY
@@ -135,9 +128,9 @@ BEGIN
 	--BEGIN TRANSACTION -- Begin of Transaction scope. Transaction will be committed after each batch. 
 	---- IF any batch fail, it will be caught IN the CATCH BLOCK AND will be rolled back.
 
-	--	SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
-	--	SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
-	--	SET @StartTime = GETDATE()
+		SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
+		SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
+		SET @StartTime = GETDATE()
 
 		;WITH AccountInfo AS ( 
 
@@ -145,15 +138,15 @@ BEGIN
 				 , AL.fi_finaccountnumber AS FinAccountNumber 
 				 , AL.fi_FinancialAccountId AS AccountId
 				 , AL.fi_contactid AS ClientId
-				 , CB.fi_Id AS ClientNumber
-				 , ROW_NUMBER() OVER (PARTITION BY AL.fi_finaccountnumber, CONVERT(DATE, AL.CreatedOn) ORDER BY AL.CreatedOn DESC, AL.fi_Id_Search DESC) AS DailyRowNum		 
-				 , AL.CreatedOn
+				 , CB.fi_Id AS ClientNumber				 
+				 , ROW_NUMBER() OVER (PARTITION BY AL.fi_finaccountnumber, CONVERT(DATE, AL.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time')  ORDER BY AL.CreatedOn DESC, AL.fi_Id_Search DESC) AS DailyRowNum		 
+				 , CONVERT(DATETIME, AL.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') AS CreatedOn
 
 			  FROM Iris.fi_fi_financialaccountauditlogBase AS AL
 
 			  --JOIN TO FI_FINANCIALACCOUNTBASE ON FIN AS EMPLOYEES WILL FAT FINGER INCORRECT FINS AND THEN LATER CORRECT THEM
 			  JOIN Iris.fi_financialaccountBase AS FA
-				ON AL.fi_finaccountnumber = FA.fi_FINAccountNumber
+				ON AL.fi_FinancialAccountId = FA.fi_FinancialAccountId
 
 			  JOIN Iris.ContactBase AS CB
 				ON AL.fi_contactid = CB.ContactId 
@@ -165,22 +158,22 @@ BEGIN
 			 WHERE ISNULL(AL.fi_combinedaccountcode, 1) <> 157610000 --NOT A COMBINED ACCOUNT (C)
 			   AND AL.fi_statuscode <> 157610016  --NOT REREGISTERED
 			   AND AL.fi_finaccountnumber IS NOT NULL --FIN MUST EXIST
-			   AND AL.CreatedOn < CONVERT(DATE, GETDATE())  --AVOID PULLING A SUBSET OF DAILY CHANGES FROM TODAY SO LIMIT TO PRIOR DAY CHANGES TO PULL IN COMPLETE LIST
+			   AND CONVERT(DATE, AL.CreatedOn) < @Yesterday --BACKFILL ONLY TO RECS AS OF YESTERDAY, SFDC LOGIC IS CURRENT AND WILL PRINT AS OF YESTERDAY 
 			   AND OTO.TEST_OIDs IS NULL --REMOVE TEST RECORDS
-  
-		  )
+
+		)
 
 		, LastDailyChange AS ( 
 
-			SELECT FinancialAccountAuditlogId 
-				 , FinAccountNumber 
-				 , AccountId
-				 , ClientId
-				 , ClientNumber
-				 , CreatedOn
-				 , HASHBYTES('SHA2_256', CONCAT(FinAccountNumber, '|', ClientId)) AS RowHash
-				 , ROW_NUMBER() OVER(PARTITION BY FinAccountNumber ORDER BY CreatedOn, FinancialAccountAuditlogId) AS RowNum
-			  FROM AccountInfo
+			SELECT AI.FinancialAccountAuditlogId 
+				 , AI.FinAccountNumber 
+				 , AI.AccountId
+				 , AI.ClientId
+				 , AI.ClientNumber
+				 , AI.CreatedOn
+				 , HASHBYTES('SHA2_256', CONCAT(AI.FinAccountNumber, '|', AI.AccountId, '|', AI.ClientId)) AS RowHash
+				 , ROW_NUMBER() OVER(PARTITION BY AI.FinAccountNumber ORDER BY AI.CreatedOn, AI.FinancialAccountAuditlogId) AS RowNum
+			  FROM AccountInfo AS AI
 			 WHERE DailyRowNum = 1 --IF RECORDS CHANGED NUMEROUS TIMES WITHIN THE DAY, GRAB THE LAST CHANGE PER DAY ONLY
 
 		) 
@@ -202,7 +195,7 @@ BEGIN
 		, ChangesOnly AS ( 
 
 			SELECT FinAccountNumber 
-				 , AccountId
+				 , AccountId			 
 				 , ClientId
 				 , ClientNumber
 				 , RowHash
@@ -226,11 +219,16 @@ BEGIN
 		 , FinalDataset AS ( 
 
 			 SELECT CO.FinAccountNumber 
-				  , REF.HouseholdUID
-				  , REF.HouseholdId
+			      , FA.fi_Id_Search AS AccountNumber
+				  , ISNULL(REF.HouseholdUID, @UnknownTextValue) AS HouseholdUID
+				  , ISNULL(REF.HouseholdId, @UnknownTextValue) AS HouseholdId
 				  , CO.ClientId
 				  , CO.ClientNumber
-				  , CO.RowHash
+				  , CASE 
+					 WHEN REF.HouseholdUID IS NULL 
+					 THEN HASHBYTES('SHA2_256', CONCAT(CO.FinAccountNumber, '|', FA.fi_Id_Search, '|', CO.ClientId)) 
+ 					 ELSE HASHBYTES('SHA2_256', CONCAT(CO.FinAccountNumber, '|', FA.fi_Id_Search, '|', REF.HouseholdUID)) 
+				    END AS RowHash --REHASH ON FIN | AID | CID/HHID (SFDC DOES NOT HAVE ACCOUNTID)
 				  , CASE 
 						WHEN CO.RowNum = 1 
 						THEN CONVERT(DATETIME, DATEDIFF(DAY, 0, MIN(FA.CreatedOn) OVER (PARTITION BY FA.fi_FINAccountNumber)))
@@ -265,6 +263,7 @@ BEGIN
 		 INSERT 
 		   INTO #HistoricalAccountAttributes (  
 				[FinAccountNumber]
+			  , [AccountNumber]
 			  , [HouseholdUID]
 			  , [HouseholdId]
 			  , [ClientId]
@@ -273,13 +272,14 @@ BEGIN
 			  , [EffectiveStartDate]
 			  , [EffectiveEndDate]
 			  , [CurrentRecord]
-			  , [DWCreatedDateTime]
-			  , [DWUpdatedDateTime]
-			  , [ETLJobProcessRunId]
-			  , [ETLJobSystemRunId]
+			  --, [DWCreatedDateTime]
+			  --, [DWUpdatedDateTime]
+			  --, [ETLJobProcessRunId]
+			  --, [ETLJobSystemRunId]
 		 )
 
 		 SELECT FinAccountNumber
+			  , AccountNumber
 			  , HouseholdUID
 			  , HouseholdId
 			  , ClientId
@@ -288,60 +288,60 @@ BEGIN
 			  , EffectiveStartDate
 			  , EffectiveEndDate
 			  , CurrentRecord 
-			  , @DWUpdatedDateTime AS DWCreatedDateTime
-			  , @DWUpdatedDateTime AS DWUpdatedDateTime
-			  , @ETLJobProcessRunId AS ETLJobProcessRunId
-			  , @ETLJobSystemRunId AS ETLJobSystemRunId  
+			  --, @DWUpdatedDateTime AS DWCreatedDateTime
+			  --, @DWUpdatedDateTime AS DWUpdatedDateTime
+			  --, @ETLJobProcessRunId AS ETLJobProcessRunId
+			  --, @ETLJobSystemRunId AS ETLJobSystemRunId  
 		   FROM FinalDataset   
---		 OPTION (Label = '#HistoricalAccountAttributes-Backfill-Query')
+		-- OPTION (Label = '#HistoricalAccountAttributes-Backfill-Query')
 
 
---		EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-Backfill-Query', @InsertCount OUT
+		--EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-Backfill-Query', @InsertCount OUT
 
 
---		SET @EndTime = GETDATE()
---		SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
+		--SET @EndTime = GETDATE()
+		--SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
 
 
---		EXEC MDR.spProcessTaskLogInsertRowCount
---				  @ETLJobProcessRunId 
---				, @ComponentName
---				, @Source 
---				, @Target 
---				, @InsertCount	 
---				, @DurationInSeconds
+		--EXEC MDR.spProcessTaskLogInsertRowCount
+		--		  @ETLJobProcessRunId 
+		--		, @ComponentName
+		--		, @Source 
+		--		, @Target 
+		--		, @InsertCount	 
+		--		, @DurationInSeconds
 
---	COMMIT TRANSACTION -- Transaction scope for Commit
+	--COMMIT TRANSACTION -- Transaction scope for Commit
 
---	END TRY
+	--END TRY
 
 
---	BEGIN CATCH 
+	--BEGIN CATCH 
 
---		ROLLBACK TRANSACTION;
---		SET @Status = 0
---		SET @ErrorMessage = CONCAT('#HistoricalAccountAttributes Backfill Error', ': ', ERROR_MESSAGE())	
+	--	ROLLBACK TRANSACTION;
+	--	SET @Status = 0
+	--	SET @ErrorMessage = CONCAT('#HistoricalAccountAttributes Backfill Error', ': ', ERROR_MESSAGE())	
 
---	END CATCH 
+	--END CATCH 
 
 
 END
 --END BACKFILL RECS IF NO RECORDS EXIST IN REFERENCE TABLE
 
 
---/*
---	TYPE 1 UPDATE FOR HOUSEHOLDUID/HOUSEHOLDID
---*/
+/*
+	TYPE 1 UPDATE FOR HOUSEHOLDUID/HOUSEHOLDID
+*/
 
 --BEGIN TRY
 
 --BEGIN TRANSACTION -- Begin of Transaction scope. Transaction will be committed after each batch. 
----- IF any batch fail, it will be caught IN the CATCH BLOCK AND will be rolled back.
+-- --IF any batch fail, it will be caught IN the CATCH BLOCK AND will be rolled back.
 
-----First, update HistoricalAccountAttributes for any IDs that have been newly mapped between CRMs
---SET @Source = '{"SourceTable":"REF.CRMClientMapping"}'
---SET @Target = '{"TargetTable":"#HistoricalAccountAttributes"}'
---SET @StartTime = GETDATE()
+--First, update HistoricalAccountAttributes for any IDs that have been newly mapped between CRMs
+SET @Source = '{"SourceTable":"REF.CRMClientMapping"}'
+SET @Target = '{"TargetTable":"#HistoricalAccountAttributes"}'
+SET @StartTime = GETDATE()
 
 ;WITH Households as (
 
@@ -362,28 +362,29 @@ END
 	UPDATE #HistoricalAccountAttributes
        SET HouseholdUID = Src.HouseholdUID
          , HouseholdId = Src.HouseholdId
-		 , DWUpdatedDateTime  = @DWUpdatedDateTime 
-		 , ETLJobProcessRunId = @ETLJobProcessRunId
-		 , ETLJobSystemRunId  = @ETLJobSystemRunId 
+		 , RowHash = HASHBYTES('SHA2_256', CONCAT(TGT.FinAccountNumber, '|', TGT.AccountNumber, '|', SRC.HouseholdUID)) --UPDATE ROW HASH TO HASH ON HH ID INSTEAD OF CLIENT ID
+		 --, DWUpdatedDateTime  = @DWUpdatedDateTime 
+		 --, ETLJobProcessRunId = @ETLJobProcessRunId
+		 --, ETLJobSystemRunId  = @ETLJobSystemRunId 
       FROM #HistoricalAccountAttributes AS TGT  
       JOIN Households SRC 
 	    ON SRC.ClientNumber_Iris = CONVERT(NVARCHAR(30),TGT.ClientNumber)
      WHERE TGT.HouseholdUID = @UnknownTextValue 
 	    OR TGT.HouseholdId = @UnknownTextValue
---    OPTION (Label = '#HistoricalAccountAttributes-HHUpdate')
+  --  OPTION (Label = '#HistoricalAccountAttributes-HHUpdate')
 
---	  EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-HHUpdate', @InsertCount OUT
+	 -- EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-HHUpdate', @InsertCount OUT
  
---	  SET @EndTime = GETDATE()
---	  SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
+	 -- SET @EndTime = GETDATE()
+	 -- SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
 
---	 EXEC MDR.spProcessTaskLogUpdateRowCount
---		  @ETLJobProcessRunId 
---		, @ComponentName
---		, @Source 
---  		, @Target 
---		, @UpdateCount	 
---		, @DurationInSeconds
+	 --EXEC MDR.spProcessTaskLogUpdateRowCount
+		--  @ETLJobProcessRunId 
+		--, @ComponentName
+		--, @Source 
+  --		, @Target 
+		--, @UpdateCount	 
+		--, @DurationInSeconds
 
 --COMMIT TRANSACTION -- Transaction scope for Commit
 
@@ -400,26 +401,29 @@ END
 
 
 
---/*
---	ACTIVE SFDC FIN --> HOUSEHOLD ASSIGNMENTS
---*/
+/*
+	ACTIVE SFDC FIN --> HOUSEHOLD ASSIGNMENTS
+*/
 
 --BEGIN TRY
 
 --BEGIN TRANSACTION
 
---	SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
---	SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
---	SET @StartTime = GETDATE()
+	SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
+	SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
+	SET @StartTime = GETDATE()
+
 
 ;WITH FinAccounts_SFDC AS (
 
-	SELECT DISTINCT --USING DISTINCT AS WE ONLY CARE ABOUT FIN TO HOUSEHOLD ASSIGNMENTS
-	       FA.FIN_Account_Number__c AS FinAccountNumber
+	SELECT FA.Id
+		 , FA.FIN_Account_Number__c AS FinAccountNumber
+		 , FA.AID_Account_Number__c AS AccountNumber		 
 		 , FA.FinServ__Household__c AS HouseholdUID
 		 , A.[Name] AS HouseholdName
          , FA.FinServ__Status__c AS AccountStatus
 		 , FA.Contract_Date__c AS ContractDate
+         , ROW_NUMBER() OVER (PARTITION BY FA.FIN_Account_Number__c ORDER BY FA.Contract_Date__c DESC, FA.Legacy_Created_Date__c DESC) AS AssignmentOrder
 	  FROM PcgSf.FinServ__FinancialAccount__c AS FA
 	  LEFT
 	  JOIN PCGSF.Account AS A 
@@ -432,82 +436,20 @@ END
 
 ) 
 
-, DistinctFINs AS ( 
-
-	SELECT DISTINCT FinAccountNumber
-	  FROM FinAccounts_SFDC
-)
-
-, DupedFINAccounts AS ( 
-
-	SELECT FinAccountNumber
-	  FROM FinAccounts_SFDC
-	 GROUP
-	    BY FinAccountNumber
-	HAVING COUNT(1) > 1 
-
- )
-
- , DeDupedFINs AS ( 
-
-	 SELECT FA.FinAccountNumber	
-		  , FA.HouseholdUID	
-		  , FA.HouseholdName	
-		  , FA.AccountStatus
-	   FROM FinAccounts_SFDC AS FA
-	   JOIN DupedFINAccounts AS DFA
-		 ON FA.FinAccountNumber = DFA.FinAccountNumber
-	  WHERE FA.AccountStatus IN ('Trading - Fully Completed') --ALL DUPES HAVE AT LEAST ONE EXISTING ACCOUNT IN STATUS = Trading - Fully Completed
-	 
-	  UNION
-
-	 SELECT FA.FinAccountNumber	
-		  , FA.HouseholdUID	
-		  , FA.HouseholdName	
-		  , FA.AccountStatus
-	   FROM FinAccounts_SFDC AS FA
-	  WHERE NOT EXISTS (SELECT 1 FROM DupedFINAccounts AS DFA WHERE FA.FinAccountNumber = DFA.FinAccountNumber)
-
-) 
-
-, DupesFinsNotInTradingCompleteStatus AS ( 
-
-	SELECT FA.FinAccountNumber
-		 , FA.HouseholdUID
-		 , FA.HouseholdName
-         , FA.AccountStatus
-		 , FA.ContractDate
-		 , ROW_NUMBER() OVER (PARTITION BY FA.FinAccountNumber ORDER BY FA.ContractDate DESC, FA.HouseholdUID COLLATE Latin1_General_100_BIN2_UTF8 DESC) AS RowNum 
-	  FROM FinAccounts_SFDC AS FA
-	  LEFT
-	  JOIN DeDupedFINs AS DDF
-	    ON FA.FinAccountNumber = DDF.FinAccountNumber
-	 WHERE DDF.FinAccountNumber IS NULL
-
-)
-
 , FinalDataset AS ( 
 
 	 SELECT FinAccountNumber	
+	      , AccountNumber
 		  , HouseholdUID	
-		  , HouseholdName	
-		  , AccountStatus
-	   FROM DeDupedFINs 
-	   
-	  UNION
-
-	 SELECT FinAccountNumber	
-		  , HouseholdUID	
-		  , HouseholdName	
-		  , AccountStatus
-	   FROM DupesFinsNotInTradingCompleteStatus
-	  WHERE RowNum = 1 --IF WE STILL HAVE DUPES, TAKE THE FIN WITH THE MOST RECENT CONTRACT DATE
+	   FROM FinAccounts_SFDC 
+	  WHERE AssignmentOrder = 1 --IF WE STILL HAVE DUPES, TAKE THE AID WITH THE MOST RECENT Id
 
 ) 
 
 , ActiveRecs_HAA AS ( 
 
 	SELECT FinAccountNumber	
+	     , AccountNumber
 		 , HouseholdUID
 		 , ClientId
 		 , ClientNumber
@@ -515,13 +457,14 @@ END
 		 , EffectiveStartDate
 		 , EffectiveEndDate
 	  FROM #HistoricalAccountAttributes
-	 WHERE CurrentRecord = 1 
+	 WHERE CurrentRecord = 1 	 
 
 )
 
     INSERT
 	  INTO #AccountHistory_Temp (
 		   FinAccountNumber	
+		 , AccountNumber
 		 , HouseholdUID
 		 , HouseholdId
 		 , ClientId
@@ -531,15 +474,16 @@ END
 	)
 
 	SELECT FD.FinAccountNumber	
+	     , FD.AccountNumber
 		 , FD.HouseholdUID
 		 , CRM.HouseholdId
 		 , CRM.ClientId_Iris
 		 , CRM.ClientNumber_Iris
-		 , HASHBYTES('SHA2_256', CONCAT(FD.FinAccountNumber, '|', FD.HouseholdUID)) AS RowHash
+		 , HASHBYTES('SHA2_256', CONCAT(FD.FinAccountNumber, '|', FD.AccountNumber, '|', FD.HouseholdUID)) AS RowHash
 		 , CASE 
 			 WHEN HAA.FinAccountNumber IS NULL THEN 'NEW'
-			 WHEN FD.HouseholdUID <> HAA.HouseholdUID THEN 'MODIFIED' --NOT LOOKING AT ROW HASH SINCE SOME IRIS RECS WERE HASHED WITH CLIENTID
-			 WHEN FD.HouseholdUID = HAA.HouseholdUID THEN 'NO CHANGE'
+			 WHEN HASHBYTES('SHA2_256', CONCAT(FD.FinAccountNumber, '|', FD.AccountNumber, '|', FD.HouseholdUID)) <> HAA.RowHash THEN 'MODIFIED' --NOT LOOKING AT ROW HASH SINCE SOME IRIS RECS WERE HASHED WITH CLIENTID
+			 WHEN HASHBYTES('SHA2_256', CONCAT(FD.FinAccountNumber, '|', FD.AccountNumber, '|', FD.HouseholdUID)) = HAA.RowHash THEN 'NO CHANGE'
 			 ELSE @UnknownTextValue
 	       END AS RecordType
 	  FROM FinalDataset AS FD
@@ -549,7 +493,8 @@ END
 	  LEFT
 	  JOIN ActiveRecs_HAA AS HAA
 	    ON FD.FinAccountNumber = HAA.FinAccountNumber
-    
+
+
 
 
 /*
@@ -561,10 +506,11 @@ END
 		SELECT AL.fi_id_Search AS FinancialAccountAuditlogId 
 			 , AL.fi_finaccountnumber AS FinAccountNumber 
 			 , AL.fi_FinancialAccountId AS AccountId
+			 , FA.fi_Id AS AccountNumber 
 			 , AL.fi_contactid AS ClientId
 			 , CB.fi_Id AS ClientNumber
-			 , ROW_NUMBER() OVER (PARTITION BY AL.fi_finaccountnumber, CONVERT(DATE, AL.CreatedOn) ORDER BY AL.CreatedOn DESC, AL.fi_Id_Search DESC) AS DailyRowNum		 
-			 , AL.CreatedOn
+			 , ROW_NUMBER() OVER (PARTITION BY AL.fi_finaccountnumber, CONVERT(DATE, AL.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time')  ORDER BY AL.CreatedOn DESC, AL.fi_Id_Search DESC) AS DailyRowNum		 	 			 
+			 , CONVERT(DATETIME, AL.CreatedOn AT TIME ZONE 'UTC' AT TIME ZONE 'Pacific Standard Time') AS CreatedOn
 
 		  FROM #AccountHistory_Temp AS AH
 		  
@@ -585,9 +531,10 @@ END
 		 WHERE ISNULL(AL.fi_combinedaccountcode, 1) <> 157610000 --NOT A COMBINED ACCOUNT (C)
 		   AND AL.fi_statuscode <> 157610016  --NOT REREGISTERED
 		   AND AL.fi_finaccountnumber IS NOT NULL --FIN MUST EXIST
-		   AND AL.CreatedOn < CONVERT(DATE, GETDATE())  --AVOID PULLING A SUBSET OF DAILY CHANGES FROM TODAY SO LIMIT TO PRIOR DAY CHANGES TO PULL IN COMPLETE LIST
+		   AND CONVERT(DATE, AL.CreatedOn) < @Yesterday --BACKFILL ONLY TO RECS AS OF YESTERDAY, SFDC LOGIC IS CURRENT AND WILL PRINT AS OF YESTERDAY 
 		   AND OTO.TEST_OIDs IS NULL --REMOVE TEST RECORDS
 		   AND AH.RecordType = 'NEW' --ONLY DO THIS FOR NEW FINS THAT DON'T ALREADY EXIST IN #HistoricalAccountAttributes
+
 	  )
 
 	, LastDailyChange AS ( 
@@ -595,10 +542,11 @@ END
 		SELECT FinancialAccountAuditlogId 
 			 , FinAccountNumber 
 			 , AccountId
+			 , AccountNumber
 			 , ClientId
 			 , ClientNumber
 			 , CreatedOn
-			 , HASHBYTES('SHA2_256', CONCAT(FinAccountNumber, '|', ClientId)) AS RowHash
+			 , HASHBYTES('SHA2_256', CONCAT(FinAccountNumber, '|', AccountNumber, '|', ClientId)) AS RowHash
 			 , ROW_NUMBER() OVER(PARTITION BY FinAccountNumber ORDER BY CreatedOn, FinancialAccountAuditlogId) AS RowNum
 		  FROM AccountInfo
 		 WHERE DailyRowNum = 1 --IF RECORDS CHANGED NUMEROUS TIMES WITHIN THE DAY, GRAB THE LAST CHANGE PER DAY ONLY
@@ -610,6 +558,7 @@ END
 		SELECT FinancialAccountAuditlogId 
 			 , FinAccountNumber 
 			 , AccountId
+			 , AccountNumber
 			 , ClientId
 			 , ClientNumber
 			 , CreatedOn
@@ -623,6 +572,7 @@ END
 
 		SELECT FinAccountNumber 
 			 , AccountId
+			 , AccountNumber
 			 , ClientId
 			 , ClientNumber
 			 , RowHash
@@ -646,8 +596,9 @@ END
 	 , FinalDataset AS ( 
 
 		 SELECT CO.FinAccountNumber 
-			  , REF.HouseholdUID
-			  , REF.HouseholdId
+			  , FA.fi_Id_Search AS AccountNumber
+			  , ISNULL(REF.HouseholdUID, @UnknownTextValue) AS HouseholdUID
+			  , ISNULL(REF.HouseholdId, @UnknownTextValue) AS HouseholdId
 			  , CO.ClientId
 			  , CO.ClientNumber
 			  , CO.RowHash
@@ -685,6 +636,7 @@ END
 	 INSERT 
 	   INTO #HistoricalAccountAttributes (  
 			[FinAccountNumber]
+		  , [AccountNumber]		  
 		  , [HouseholdUID]
 		  , [HouseholdId]
 		  , [ClientId]
@@ -693,13 +645,14 @@ END
 		  , [EffectiveStartDate]
 		  , [EffectiveEndDate]
 		  , [CurrentRecord]
-		  , [DWCreatedDateTime]
-		  , [DWUpdatedDateTime]
-		  , [ETLJobProcessRunId]
-		  , [ETLJobSystemRunId]
+		  --, [DWCreatedDateTime]
+		  --, [DWUpdatedDateTime]
+		  --, [ETLJobProcessRunId]
+		  --, [ETLJobSystemRunId]
 	 )
 
 	 SELECT FD.FinAccountNumber
+	      , FD.AccountNumber
 		  , FD.HouseholdUID
 		  , FD.HouseholdId
 		  , FD.ClientId
@@ -708,32 +661,33 @@ END
 		  , FD.EffectiveStartDate
 		  , FD.EffectiveEndDate
 		  , FD.CurrentRecord 
-		  , @DWUpdatedDateTime AS DWCreatedDateTime
-		  , @DWUpdatedDateTime AS DWUpdatedDateTime
-		  , @ETLJobProcessRunId AS ETLJobProcessRunId
-		  , @ETLJobSystemRunId AS ETLJobSystemRunId  
+		  --, @DWUpdatedDateTime AS DWCreatedDateTime
+		  --, @DWUpdatedDateTime AS DWUpdatedDateTime
+		  --, @ETLJobProcessRunId AS ETLJobProcessRunId
+		  --, @ETLJobSystemRunId AS ETLJobSystemRunId  
 	   FROM FinalDataset AS FD
 	   LEFT
 	   JOIN #HistoricalAccountAttributes AS HAA
 	     ON FD.FinAccountNumber = HAA.FinAccountNumber
+		AND FD.AccountNumber = HAA.AccountNumber
 		AND FD.HouseholdUID = HAA.HouseholdUID
 		AND FD.EffectiveStartDate = HAA.EffectiveStartDate
 	  WHERE HAA.FinAccountNumber IS NULL
---	 OPTION (Label = '#HistoricalAccountAttributes-NewRecBackfill-Query')
+	-- OPTION (Label = '#HistoricalAccountAttributes-NewRecBackfill-Query')
 
---	EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-NewRecBackfill-Query', @InsertCount OUT
+	--EXEC MDR.spGetRowCountByQueryLabel '#HistoricalAccountAttributes-NewRecBackfill-Query', @InsertCount OUT
 
---	SET @EndTime = GETDATE()
---	SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
+	--SET @EndTime = GETDATE()
+	--SET @DurationInSeconds = DATEDIFF(SECOND, @StartTime, @EndTime)
 
 
---	EXEC MDR.spProcessTaskLogInsertRowCount
---			  @ETLJobProcessRunId 
---			, @ComponentName
---			, @Source 
---			, @Target 
---			, @InsertCount	 
---			, @DurationInSeconds
+	--EXEC MDR.spProcessTaskLogInsertRowCount
+	--		  @ETLJobProcessRunId 
+	--		, @ComponentName
+	--		, @Source 
+	--		, @Target 
+	--		, @InsertCount	 
+	--		, @DurationInSeconds
 
 --COMMIT TRANSACTION -- Transaction scope for Commit
 
@@ -749,31 +703,31 @@ END
 --END CATCH 
 
 
---/*
---	END - RUN NEW SFDC FIN RECS THROUGH IRIS BACKFILL SO THAT WE PULL ANY HISTORY THAT WE CAN FIRST
---*/
+/*
+	END - RUN NEW SFDC FIN RECS THROUGH IRIS BACKFILL SO THAT WE PULL ANY HISTORY THAT WE CAN FIRST
+*/
 
 
 
 
---/*
---	START - UPSERT FINS IN #HistoricalAccountAttributes THAT HAVE BEEN ASSIGNED TO A NEW CLIENT/HOUSEHOLD SINCE LAST ETL
---*/
+/*
+	START - UPSERT FINS IN #HistoricalAccountAttributes THAT HAVE BEEN ASSIGNED TO A NEW CLIENT/HOUSEHOLD SINCE LAST ETL
+*/
 
 --BEGIN TRY
 
 --BEGIN TRANSACTION
 
---	SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
---	SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
---	SET @StartTime = GETDATE()
+	SET @Source = '[{"SourceTable":"Iris.fi_fi_financialaccountauditlogBase"}]'
+	SET @Target = '[{"TargetTable":"#HistoricalAccountAttributes"}]'
+	SET @StartTime = GETDATE()
 
 	UPDATE #HistoricalAccountAttributes
 	   SET CurrentRecord = 0 
-         , EffectiveEndDate = @Yesterday
-         , DWUpdatedDateTime = @DWUpdatedDateTime 
-         , ETLJobProcessRunId = @ETLJobProcessRunId
-         , ETLJobSystemRunId = @ETLJobSystemRunId 
+		 , EffectiveEndDate = @Yesterday
+         --, DWUpdatedDateTime = @DWUpdatedDateTime 
+         --, ETLJobProcessRunId = @ETLJobProcessRunId
+         --, ETLJobSystemRunId = @ETLJobSystemRunId 
 	  FROM #AccountHistory_Temp AS SRC
 	  JOIN #HistoricalAccountAttributes AS TGT
 	    ON SRC.FinAccountNumber = TGT.FinAccountNumber 
@@ -798,6 +752,7 @@ END
 	 INSERT 
 	   INTO #HistoricalAccountAttributes (  
 			[FinAccountNumber]
+		  , [AccountNumber]
 		  , [HouseholdUID]
 		  , [HouseholdId]
 		  , [ClientId]
@@ -806,25 +761,26 @@ END
 		  , [EffectiveStartDate]
 		  , [EffectiveEndDate]
 		  , [CurrentRecord]
-		  , [DWCreatedDateTime]
-		  , [DWUpdatedDateTime]
-		  , [ETLJobProcessRunId]
-		  , [ETLJobSystemRunId]
+		  --, [DWCreatedDateTime]
+		  --, [DWUpdatedDateTime]
+		  --, [ETLJobProcessRunId]
+		  --, [ETLJobSystemRunId]
 	 )
 
 	 SELECT FinAccountNumber
+	      , AccountNumber
 		  , HouseholdUID
 		  , HouseholdId
 		  , ClientId
 		  , ClientNumber
-		  , HASHBYTES('SHA2_256', CONCAT(FinAccountNumber, '|', HouseholdUID)) AS RowHash
+		  , HASHBYTES('SHA2_256', CONCAT(FinAccountNumber, '|', AccountNumber, '|', HouseholdUID)) AS RowHash
 		  , @Yesterday AS EffectiveStartDate
 		  , @MaxDateValue AS EffectiveEndDate
 		  , 1 AS CurrentRecord 
-		  , @DWUpdatedDateTime AS DWCreatedDateTime
-		  , @DWUpdatedDateTime AS DWUpdatedDateTime
-		  , @ETLJobProcessRunId AS ETLJobProcessRunId
-		  , @ETLJobSystemRunId AS ETLJobSystemRunId  
+		  --, @DWUpdatedDateTime AS DWCreatedDateTime
+		  --, @DWUpdatedDateTime AS DWUpdatedDateTime
+		  --, @ETLJobProcessRunId AS ETLJobProcessRunId
+		  --, @ETLJobSystemRunId AS ETLJobSystemRunId  
 	   FROM #AccountHistory_Temp AS SRC
 	  WHERE SRC.RecordType IN ('MODIFIED', 'NEW')
 --	 OPTION (Label = '#HistoricalAccountAttributes-Insert-Query')
@@ -872,6 +828,10 @@ END
 --GO
 
 
+
+
+
+
 /******************************************************************************
                            VALIDATION SCRIPT
 ******************************************************************************/
@@ -909,6 +869,7 @@ select *
                    END EndDateMatchesNextStartDate
               from #HistoricalAccountAttributes) as a 
     where a.EndDateMatchesNextStartDate = 0 
+
 
 --Check for duplicate RowHashs: PASS
 select * 
