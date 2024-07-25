@@ -1,0 +1,76 @@
+USE [AZURE_FICRMMSCRM]
+
+IF EXISTS (
+        SELECT 1
+          FROM SYS.views AS V
+          JOIN SYS.schemas AS S
+            ON V.schema_id = S.schema_id
+         WHERE V.name = 'vfi_financialplanningserviceBase'
+           AND S.name = 'edwreader'
+)
+DROP VIEW edwreader.vfi_financialplanningserviceBase
+GO
+
+CREATE VIEW [edwreader].[vfi_financialplanningserviceBase]
+AS
+SELECT [fi_financialplanningserviceId]
+     , [CreatedOn]
+     , [CreatedBy]
+     , [ModifiedOn]
+     , [ModifiedBy]
+     , [CreatedOnBehalfBy]
+     , [ModifiedOnBehalfBy]
+     , [OwnerId]
+     , [OwnerIdType]
+     , [OwningBusinessUnit]
+     , [statecode]
+     , [statuscode]
+     , [VersionNumber]
+     , [ImportSequenceNumber]
+     , [OverriddenCreatedOn]
+     , [TimeZoneRuleVersionNumber]
+     , [UTCConversionTimeZoneCode]
+     , [fi_name]
+     , [fi_assignedon]
+     , [fi_clientinforeceivedon]
+     , [fi_completedon]
+     , [fi_deliverablecompletedon]
+     , [fi_deliverablestartedon]
+     , [fi_Description]
+     , [fi_icinvolvement]
+     , [fi_initialcallscheduledon]
+     , [fi_nextappointmenton]
+     , [fi_qcperformedon]
+     , [fi_requestdetail]
+     , [fi_reviewedwithclienton]
+     , [fi_rrwithic]
+     , [fi_senttoclienton]
+     , [fi_Servicerequested]
+     , [fi_submittedon]
+     , [fi_subtype]
+     , [fi_termthreat]
+     , [fi_timesensitive]
+     , [fi_workingwith]
+     , [fi_contactid]
+     , [fi_assignedtouserid]
+     , [fi_internalpointofcontact]
+     , [fi_healthinsurancemedicare]
+     , [fi_pensionnuastockoptions]
+     , [fi_educationsavings]
+     , [fi_realestatereversemortgages]
+     , [fi_giftingcharitable]
+     , [fi_insurancelifeliabilityumbrella]
+     , [fi_longtermcare]
+     , [fi_retirementplanningbudgeting]
+     , [fi_taxplanningaccountsequencing]
+     , [fi_engagementletterreceivedon]
+     , [fi_prioryeartaxreturnreceivedon]
+     , [fi_clientengagementlettersenton]
+     , [fi_xmlTransport]
+     , [fi_workbooksenton]
+     , [fi_FollowUpDueDate]
+     , [fi_FollowUpSubject]
+     , [fi_FollowUpFrequencyCode]
+     , [fi_FollowUpAssignedToUserId]
+     , [fi_SubmissionNotification]
+  FROM [FICRM_MSCRM].[dbo].[fi_financialplanningserviceBase] (NOLOCK)
